@@ -14,7 +14,9 @@ Large-scale macroeconomic models are typically "square" — each equation determ
 > 📄 Full runnable version: [`examples/quick_example.jl`](examples/quick_example.jl)
 
 ```julia
-using JuMP, Ipopt, SquareModels
+import JuMP
+using JuMP: Model, set_silent
+using Ipopt, SquareModels
 
 data = ModelDictionary(Model(Ipopt.Optimizer))
 set_silent(data.model)
@@ -22,16 +24,16 @@ set_silent(data.model)
 j = 1:2  # Types of labor
 
 @variables data.model begin
-    L[j]  # Labor demand
-    w[j]  # Wage
-    Y     # Output
-    C     # Consumption
-    p     # Price
+    L[j], "Labor demand"
+    w[j], "Wage"
+    Y, "Output"
+    C, "Consumption"
+    p, "Price"
 
-    N[j]  # Labor force (exogenous)
-    ρ[j]  # Productivity (calibrated)
-    μ[j]  # Scale parameter (calibrated)
-    σ     # Substitution elasticity (exogenous)
+    N[j], "Labor force (exogenous)"
+    ρ[j], "Productivity (calibrated)"
+    μ[j], "Scale parameter (calibrated)"
+    σ, "Substitution elasticity (exogenous)"
 end
 
 # Define a Block: each line pairs an endogenous variable with its equation
@@ -73,18 +75,23 @@ For larger models, organize code into Julia modules with explicit cross-module i
 > 📄 Full runnable version: [`examples/modular_example.jl`](examples/modular_example.jl)
 
 ```julia
+import JuMP
+using JuMP: Model, set_silent
+using Ipopt, SquareModels
+
 data = ModelDictionary(Model(Ipopt.Optimizer))
 
 module Production
-    using JuMP, SquareModels
+    import JuMP
+    using SquareModels
     import ..data
 
     const s = [:agri, :manuf]  # Sectors defined here
 
     @variables data.model begin
-        Y[s]    # Output by sector
-        p[s]    # Price by sector
-        A[s]    # Productivity (calibrated)
+        Y[s], "Output by sector"
+        p[s], "Price by sector"
+        A[s], "Productivity (calibrated)"
     end
 
     function define_equations()
@@ -104,15 +111,16 @@ module Production
 end
 
 module HouseHolds
-    using JuMP, SquareModels
+    import JuMP
+    using SquareModels
     import ..data
 
     s = Main.Production.s  # Import sectors from Production
     p = Main.Production.p  # Import prices from Production
 
     @variables data.model begin
-        C[s]    # Consumption by sector
-        α[s]    # Consumption shares (calibrated)
+        C[s], "Consumption by sector"
+        α[s], "Consumption shares (calibrated)"
     end
 
     function define_equations()
@@ -177,19 +185,56 @@ Use `solve!` to update the data in-place:
 solve!(block, data)
 ```
 
+### Variable Tags and Descriptions
+
+Variables can have descriptions and tags for documentation and programmatic grouping.
+Tags use Julia's `::` syntax, following the Holy trait pattern:
+
+```julia
+# Define tags as trait markers
+const GrowthAdjusted = Tag(:growth_adjusted)
+const InflationAdjusted = Tag(:inflation_adjusted)
+
+# Block-level tags apply to ALL variables in the block
+@variables data.model :: GrowthAdjusted begin
+    qGDP[t], "Real GDP"
+    qC[t], "Real consumption"
+end
+
+# Variable-level tags for individual variables
+@variables data.model begin
+    pGDP[t] :: InflationAdjusted, "GDP deflator"
+    σ, "Substitution elasticity"
+end
+
+# Combine block-level and variable-level tags (they accumulate)
+@variables data.model :: GrowthAdjusted begin
+    vGDP[t] :: InflationAdjusted, "Nominal GDP"  # Has both tags
+end
+
+# Query metadata
+description(:vGDP)              # "Nominal GDP"
+tags(:vGDP)                     # Set([GrowthAdjusted, InflationAdjusted])
+has_tag(:vGDP, GrowthAdjusted)  # true
+tagged(GrowthAdjusted)          # [:qGDP, :qC, :vGDP]
+```
+
+Note: SquareModels provides its own `@variables` macro that extends JuMP's version with tags and descriptions. If you need JuMP's original macro, use `JuMP.@variables`.
+
 ## Project Structure
 
 ```
 SquareModels/
 ├── src/
-│   ├── SquareModels.jl      # Main module: Block, @block, @endo_exo!
-│   ├── endo_exo.jl          # Endo-exo swap implementation
-│   ├── ModelDictionaries.jl # Variable-value mappings
-│   ├── solve.jl             # Solve functions
-│   └── utils.jl             # Helper functions
+│   ├── SquareModels.jl       # Main module: Block, @block, @endo_exo!
+│   ├── endo_exo.jl           # Endo-exo swap implementation
+│   ├── ModelDictionaries.jl  # Variable-value mappings
+│   ├── solve.jl              # Solve functions
+│   ├── tagged_variables.jl   # @variables macro with tags/descriptions
+│   └── utils.jl              # Helper functions
 ├── examples/
-│   ├── quick_example.jl     # Simple labor market model
-│   └── modular_example.jl   # Modular CGE model example
+│   ├── quick_example.jl      # Simple labor market model
+│   └── modular_example.jl    # Modular CGE model example
 └── test/
     └── runtests.jl
 ```

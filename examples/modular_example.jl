@@ -10,7 +10,7 @@
 # - Production: Defines sectors, output, and prices
 # - HouseHolds: Consumption demand using production variables
 
-using JuMP
+using JuMP: Model, set_silent
 using Ipopt
 using SquareModels
 
@@ -32,18 +32,19 @@ T::Int = max_T    # Terminal year (can be modified later)
 # Submodel: Production
 # ==============================================================================
 module Production
-	using JuMP, SquareModels
+	import JuMP
+	using SquareModels
 	import ..db, ..t, ..t₁, ..T
 
 	# Sectors defined in this module
 	const s = [:agri, :manuf]
 
 	@variables db.model begin
-		Y[s,t]     # Output by sector and time
-		p[s,t]     # Price by sector and time
-		K[s,t]     # Capital input (exogenous)
-		A[s]       # Productivity (calibrated, time-invariant)
-		g          # Growth rate (calibrated)
+		Y[s,t], "Output by sector and time"
+		p[s,t], "Price by sector and time"
+		K[s,t], "Capital input (exogenous)"
+		A[s], "Productivity (calibrated, time-invariant)"
+		g, "Growth rate (calibrated)"
 	end
 
 	function define_equations()
@@ -86,7 +87,8 @@ end
 # Submodel: HouseHolds
 # ==============================================================================
 module HouseHolds
-	using JuMP, SquareModels
+	import JuMP
+	using SquareModels
 	import ..db, ..t, ..t₁, ..T
 
 	# Import sectors from Production
@@ -97,10 +99,10 @@ module HouseHolds
 	p = Main.Production.p
 
 	@variables db.model begin
-		C[s,t]     # Consumption by sector and time
-		U[t]       # Utility per period
-		α[s]       # Consumption shares (calibrated, time-invariant)
-		I[t]       # Income (exogenous)
+		C[s,t], "Consumption by sector and time"
+		U[t], "Utility per period"
+		α[s], "Consumption shares (calibrated, time-invariant)"
+		I[t], "Income (exogenous)"
 	end
 
 	function define_equations()

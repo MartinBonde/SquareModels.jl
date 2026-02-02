@@ -8,7 +8,7 @@ using Ipopt
 
 @testset "copy_variable" begin
 	m = Model()
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y[1:5]
 	end
@@ -23,7 +23,7 @@ end
 
 @testset "@_block" begin
 	m = Model()
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y[1:5]
 		z[1:3, [:a, :b]]
@@ -68,7 +68,7 @@ end
 
 @testset "@block" begin
 	m = Model(Ipopt.Optimizer)
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y[1:5]
 		z[1:3, [:a, :b]]
@@ -95,7 +95,7 @@ end
 
 @testset "solve block" begin
 	m = Model(Ipopt.Optimizer)
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y[1:5]
 		z[1:3, [:a, :b]]
@@ -115,7 +115,7 @@ end
 
 @testset "_endo_exo!" begin
 	m = Model(Ipopt.Optimizer)
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y[1:5]
 		x_exo
@@ -157,7 +157,7 @@ end
 
 @testset "@endo_exo!" begin
 	m = Model(Ipopt.Optimizer)
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y[1:5]
 		x_exo
@@ -207,7 +207,7 @@ end
 
 @testset "@endo_exo! error messages" begin
 	m = Model()
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y
 		z
@@ -276,7 +276,7 @@ end
 	end
 
 	@testset "length mismatch" begin
-		@variables m begin
+		JuMP.@variables m begin
 			a[1:3]
 			b[1:5]
 		end
@@ -298,7 +298,7 @@ end
 
 @testset "Block subtraction" begin
 	m = Model()
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y
 		z
@@ -326,7 +326,7 @@ end
 
 @testset "Block addition with overlapping variables" begin
 	m = Model()
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y
 		z[1:3]
@@ -420,7 +420,7 @@ end
 @testset "Trade model definition" begin
   m = Model()
   D = S = 1:2
-  @variables m begin
+  JuMP.@variables m begin
 		C[D] >= 1e-6 # CES aggregate consumption in country d
 		c[D,S] >= 1e-6 # Consumption in country d from country s
 		pᶜ[D] >= 1e-6 # CES price index in country d
@@ -480,7 +480,7 @@ end
 
 @testset "Block diagnostics" begin
 	m = Model()
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y[1:3]
 	end
@@ -506,7 +506,7 @@ end
 
 @testset "Edge cases" begin
 	m = Model()
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y[1:5]
 		αβγδ_long_name_with_unicode_σ
@@ -545,7 +545,7 @@ end
 
 @testset "Residual variables" begin
 	m = Model()
-	@variables m begin
+	JuMP.@variables m begin
 		x
 		y[1:3]
 		z[1:2, [:a, :b]]
@@ -617,7 +617,7 @@ end
 			# GDP == C + I + G  =>  (GDP + GDP_J) == C + I + G
 			# Fix GDP=100, C+I+G=180, so GDP_J should be 80
 			m = Model(Ipopt.Optimizer)
-			@variables m begin
+			JuMP.@variables m begin
 				GDP
 				C
 				I
@@ -690,7 +690,7 @@ end
 			# Transformed: C + I == (GDP + GDP_J)
 			# Fix GDP=100, C+I=150: 150 == (100 + GDP_J) => GDP_J = 50
 			m = Model(Ipopt.Optimizer)
-			@variables m begin
+			JuMP.@variables m begin
 				GDP
 				C
 				I

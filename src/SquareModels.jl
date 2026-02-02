@@ -9,11 +9,13 @@ module SquareModels
 
 export @block, Block, @endo_exo!, @variables
 export endogenous, residuals, variables, exogenous, overlaps, shared_endogenous
+export ConstraintRef, VariableRef  # Re-exported from JuMP for macro hygiene
 export ModelDictionary, fix, unfix, set_start_value, value, value_dict, add_missing_model_variables!
 export keys_match, assert_no_diff
 export unload, load
 export RESIDUAL_SUFFIX
 export solve, solve!
+export Tag, description, tags, has_tag, tagged, metadata
 
 # Constraints are named after the associated endogenous variable
 # A prefix is added as a constraint and variable cannot share the same name
@@ -29,8 +31,8 @@ using Lazy
 using JuMP: JuMP, AbstractModel, AbstractVariableRef, VariableRef, ConstraintRef, Containers
 using JuMP: AffExpr, QuadExpr, NonlinearExpr
 using JuMP.Containers: DenseAxisArray
-using JuMP: @variables, @variable, @constraint, constraint_object
-using JuMP: set_name, name, variable_by_name, fix, is_fixed, unfix, all_variables, value, set_start_value
+using JuMP: @variable, @constraint, constraint_object
+using JuMP: set_name, name, variable_by_name, fix, is_fixed, unfix, unregister, all_variables, value, set_start_value
 using JuMP: list_of_constraint_types, all_constraints, is_valid, object_dictionary
 
 include("utils.jl")
@@ -517,7 +519,7 @@ macro _block(container, ref_vars, constraint, extra...)
 	# Use _get_model to extract the JuMP model at runtime
 	model_expr = :(SquareModels._get_model($container))
 
-	push!(code.args, :(unregister($model_expr, Symbol($constraint_name))))
+	push!(code.args, :(JuMP.unregister($model_expr, Symbol($constraint_name))))
 	# Create residual variable with same shape as original variable (using copy_variable)
 	push!(code.args, :(SquareModels.copy_variable($residual_name, $base_sym)))
 
@@ -528,7 +530,7 @@ macro _block(container, ref_vars, constraint, extra...)
 		# Scalar variable case - single constraint
 		macrocall = quote
 			let _m = $model_expr
-				cons = @constraint(_m, $constraint_symbol, $transformed_constraint, $(extra...))
+				cons = JuMP.@constraint(_m, $constraint_symbol, $transformed_constraint, $(extra...))
 				endo = $ref_vars
 				resid = _m[$(QuoteNode(residual_symbol))]
 				([endo], [resid], ConstraintRef[cons])
@@ -538,7 +540,7 @@ macro _block(container, ref_vars, constraint, extra...)
 		indices = ref_vars.args[2:end]
 		macrocall = quote
 			let _m = $model_expr
-				cons = @constraint(_m, $constraint_symbol[$(indices...)], $transformed_constraint, $(extra...))
+				cons = JuMP.@constraint(_m, $constraint_symbol[$(indices...)], $transformed_constraint, $(extra...))
 				endos = [$base_sym[axes(cons)...]...]
 				resids = [_m[$(QuoteNode(residual_symbol))][axes(cons)...]...]
 				con_refs = ConstraintRef[cons[axes(cons)...]...]
@@ -726,6 +728,7 @@ function JuMP.unfix(b::Block)
 end
 
 include("endo_exo.jl")
+include("tagged_variables.jl")
 include("ModelDictionaries.jl")
 include("solve.jl")
 

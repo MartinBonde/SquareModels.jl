@@ -5,7 +5,8 @@
 # - Calibrating parameters from data
 # - Running counterfactual scenarios
 
-using JuMP
+import JuMP
+using JuMP: Model, set_silent
 using Ipopt
 using SquareModels
 
@@ -24,17 +25,17 @@ j = 1:2  # Types of labor
 # Variables
 # ------------------------------------------------------------------------------
 @variables data.model begin
-	L[j]  # Labor demand
-	w[j]  # Wage
-	Y     # Output
-	C     # Consumption
-	p     # Price
+	L[j], "Labor demand"
+	w[j], "Wage"
+	Y, "Output"
+	C, "Consumption"
+	p, "Price"
 
-	N[j]  # Labor force (exogenous)
-	σ     # Substitution elasticity (exogenous)
+	N[j], "Labor force (exogenous)"
+	σ, "Substitution elasticity (exogenous)"
 
-	ρ[j]  # Productivity (calibrated)
-	μ[j]  # Scale parameter (calibrated)
+	ρ[j], "Productivity (calibrated)"
+	μ[j], "Scale parameter (calibrated)"
 end
 
 # ------------------------------------------------------------------------------

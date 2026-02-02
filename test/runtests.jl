@@ -6,6 +6,7 @@ using Test
 	include("test_ModelDictionaries.jl")
 	include("test_build_model.jl")
 	include("test_integration.jl")
+	include("test_tagged_variables.jl")
 
 	@testset "Examples" begin
 		@testset "quick_example.jl" begin

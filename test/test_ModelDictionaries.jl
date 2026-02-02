@@ -12,7 +12,7 @@ const IN_CI = get(ENV, "CI", "false") == "true"
 using GAMS: write_gdx
 
 model = Model()
-vars = @variables model begin
+vars = JuMP.@variables model begin
 	x
 	y[1:5]
 	z[1:5, [:a, :b, :c]]
@@ -127,7 +127,7 @@ end
 @testset "Test fixing variables" begin
 	# Create new model, as we are changing model state
 	model = Model()
-	vars = @variables model begin
+	vars = JuMP.@variables model begin
 		x
 		y[1:5]
 		z[1:5, [:a, :b, :c]]
@@ -157,7 +157,7 @@ end
 @testset "Test setting start values" begin
 	# Create new model, as we are changing model state
 	model = Model()
-	vars = @variables model begin
+	vars = JuMP.@variables model begin
 		x
 		y[1:5]
 		z[1:5, [:a, :b, :c]]

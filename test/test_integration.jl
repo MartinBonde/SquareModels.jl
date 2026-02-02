@@ -1,7 +1,8 @@
 module TestIntegration
 
 using Test
-using JuMP
+import JuMP
+using JuMP: Model, set_silent, value, @variable, all_variables, @constraint, @objective, optimize!
 using SquareModels
 using Ipopt
 
@@ -9,7 +10,7 @@ using Ipopt
     m = Model(Ipopt.Optimizer)
     set_silent(m)
 
-    @variables m begin
+    JuMP.@variables m begin
         p >= 0.01  # Price
         q >= 0     # Quantity
         α          # Demand intercept
@@ -43,7 +44,7 @@ end
     m = Model(Ipopt.Optimizer)
     set_silent(m)
 
-    @variables m begin
+    JuMP.@variables m begin
         Y >= 0.01  # Output
         L >= 0.01  # Labor
         A          # Productivity (to calibrate)
@@ -81,7 +82,7 @@ end
     m = Model(Ipopt.Optimizer)
     set_silent(m)
 
-    @variables m begin
+    JuMP.@variables m begin
         Y >= 0.01  # Output
         L >= 0.01  # Labor
         K >= 0.01  # Capital
@@ -120,7 +121,7 @@ end
     m = Model(Ipopt.Optimizer)
     set_silent(m)
 
-    @variables m begin
+    JuMP.@variables m begin
         p1 >= 0.01  # Price of good 1 (numeraire)
         p2 >= 0.01  # Price of good 2
         x1[1:2] >= 0  # Consumption of good 1 by agent i
