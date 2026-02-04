@@ -36,7 +36,7 @@ end
 		@test typeof(v1) <: AbstractVector{VariableRef}
 		@test typeof(cons1) <: AbstractVector{ConstraintRef}
 		@test length(v1) == length(cons1) == length(b1) == 1
-		@test x ∈ b1
+		@test is_endogenous(x, b1)
 	end
 
 	@testset "y[1:4]" begin
@@ -44,7 +44,7 @@ end
 		b2 = SquareModels.Block(m, v2, r2, Set{VariableRef}(), cons2)
 		@test typeof(v2) <: AbstractVector{VariableRef}
 		@test length(v2) == length(cons2) == length(b2) == 4
-		@test all(y[i] ∈ b2 for i ∈ 1:4)
+		@test all(is_endogenous(y[i], b2) for i ∈ 1:4)
 	end
 
 	@testset "y[5]" begin
@@ -52,7 +52,7 @@ end
 		b3 = SquareModels.Block(m, v3, r3, Set{VariableRef}(), cons3)
 		@test typeof(v3) <: AbstractVector{VariableRef}
 		@test length(v3) == length(cons3) == length(b3) == 1
-		@test y[5] ∈ b3
+		@test is_endogenous(y[5], b3)
 	end
 
 	@testset "z" begin
@@ -62,7 +62,7 @@ end
 		b4 = SquareModels.Block(m, v4, r4, Set{VariableRef}(), cons4)
 		@test typeof(v4) <: AbstractVector{VariableRef}
 		@test length(v4) == length(cons4) == length(b4) == 6
-		@test all(z[i, j] ∈ b4 for i ∈ t₁:T, j ∈ [:a, :b])
+		@test all(is_endogenous(z[i, j], b4) for i ∈ t₁:T, j ∈ [:a, :b])
 	end
 end
 
@@ -256,7 +256,7 @@ end
 		end
 		@test err isa ErrorException
 		@test occursin("y is not endogenous", err.msg)
-		# Should suggest swap since x ∈ block and y ∈ block.variables
+		# Should suggest swap since x is endogenous and y appears in block
 		@test occursin("Did you swap the arguments?", err.msg)
 		@test occursin("@endo_exo!(block, y, x)", err.msg)
 	end

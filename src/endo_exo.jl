@@ -11,7 +11,7 @@ function _endo_exo!(block::Block, endos, exos, error_msg)
 	end
 
 	for (endo, exo) in zip(endos, exos)
-	    if exo ∉ block
+	    if !is_endogenous(exo, block)
 	        block_vars_preview = join(string.(block.endogenous[1:min(10, length(block.endogenous))]), ", ")
 	        if length(block.endogenous) > 10
 	            block_vars_preview *= ", ..."
@@ -21,7 +21,7 @@ function _endo_exo!(block::Block, endos, exos, error_msg)
 	        push!(error_parts, "  Endogenous variables in block ($(length(block.endogenous))): $block_vars_preview")
 
 	        # Only suggest swap if it would actually work
-	        if endo ∈ block && exo ∈ block.variables
+	        if is_endogenous(endo, block) && exo ∈ block
 	            push!(error_parts, "  Did you swap the arguments? Try: @endo_exo!(block, $exo, $endo)")
 	        end
 

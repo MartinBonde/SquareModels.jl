@@ -489,7 +489,15 @@ function Base.:-(a::Block, b::Block)
 		return Block(a.model)
 	end
 	# Filter constraints using the same mask (constraints are parallel to endogenous)
-	Block(a.model, a.endogenous[mask], a.residuals[mask], Set{VariableRef}(), a.constraints[mask])
+	filtered_constraints = a.constraints[mask]
+
+	# Collect all variables from remaining constraints
+	all_vars = Set{VariableRef}()
+	for c in filtered_constraints
+		collect_variables!(all_vars, constraint_object(c).func)
+	end
+
+	Block(a.model, a.endogenous[mask], a.residuals[mask], all_vars, filtered_constraints)
 end
 
 make_constraint_name(var) = SquareModels.CONSTRAINT_PREFIX * string(var)
