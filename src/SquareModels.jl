@@ -7,8 +7,8 @@ A JuMP extension for writing modular models with square systems of equations
 """
 module SquareModels
 
-export @block, Block, @endo_exo!, @variables
-export endogenous, residuals, variables, exogenous, overlaps, shared_endogenous
+export @block, Block, @endo_exo!, @variables, add_equation
+export endogenous, residuals, variables, exogenous, is_endogenous, overlaps, shared_endogenous
 export ConstraintRef, VariableRef  # Re-exported from JuMP for macro hygiene
 export ModelDictionary, fix, unfix, set_start_value, value, value_dict, add_missing_model_variables!
 export keys_match, assert_no_diff
@@ -137,8 +137,33 @@ Block(model) = Block(model, VariableRef[], VariableRef[], Set{VariableRef}(), Co
 Base.length(b::Block) = length(b.endogenous)
 Base.iterate(b::Block) = iterate(b.endogenous)
 Base.iterate(b::Block, state) = iterate(b.endogenous, state)
-Base.in(var::VariableRef, b::Block) = var ∈ b._endogenous_set
 Base.copy(b::Block) = Block(b.model, copy(b.endogenous), copy(b.residuals), copy(b.variables), copy(b.constraints))
+
+"""
+    is_endogenous(var::VariableRef, b::Block) → Bool
+
+Check if a variable is endogenous in the block (i.e., has an associated constraint).
+Uses O(1) set lookup.
+
+# Example
+```julia
+b = @block model begin
+    x, x == 1
+end
+is_endogenous(x, b)  # true
+```
+"""
+is_endogenous(var::VariableRef, b::Block) = var ∈ b._endogenous_set
+
+"""
+    var ∈ block → Bool
+
+Check if a variable appears in the block's constraints (either as endogenous or exogenous).
+Uses O(1) set lookup.
+
+See also: [`is_endogenous`](@ref) to check specifically for endogenous variables.
+"""
+Base.in(var::VariableRef, b::Block) = var ∈ b.variables
 
 """
     endogenous(b::Block) → Vector{VariableRef}
@@ -469,6 +494,49 @@ end
 
 make_constraint_name(var) = SquareModels.CONSTRAINT_PREFIX * string(var)
 make_residual_name(var) = string(var) * SquareModels.RESIDUAL_SUFFIX
+
+"""
+    add_equation(model, endo::VariableRef, lhs, rhs=0)
+
+Create a Block with a single endogenous variable and its equation.
+
+Creates a residual variable (fixed to 0) and the equation `lhs + resid == rhs`.
+The residual follows the standard naming convention (endo name + RESIDUAL_SUFFIX).
+
+This is the runtime equivalent of a single line in a `@block` macro - use it when you
+need to programmatically add endogenous/equation pairs with runtime variable references.
+
+# Arguments
+- `model`: The JuMP model (or ModelDictionary)
+- `endo::VariableRef`: The variable to make endogenous
+- `lhs`: Left-hand side expression
+- `rhs`: Right-hand side (defaults to 0)
+
+# Returns
+A Block containing the endogenous/equation pair, which can be merged with other blocks using `+`.
+
+# Examples
+```julia
+block = block + add_equation(model, x[t], x[t], x[t+1])    # x[t] == x[t+1]
+block = block + add_equation(model, x[t], x[t] - x[t+1])   # x[t] - x[t+1] == 0
+```
+"""
+function add_equation(model, endo::VariableRef, lhs, rhs=0)
+	m = _get_model(model)
+	var_name = name(endo)
+
+	resid = @variable(m, base_name = make_residual_name(var_name))
+	fix(resid, 0)
+
+	unregister(m, Symbol(make_constraint_name(var_name)))
+	con = JuMP.add_constraint(m, JuMP.ScalarConstraint(lhs - rhs + resid, JuMP.MOI.EqualTo(0.0)), make_constraint_name(var_name))
+
+	all_vars = Set{VariableRef}([endo, resid])
+	collect_variables!(all_vars, lhs)
+	collect_variables!(all_vars, rhs)
+
+	Block(m, [endo], [resid], all_vars, ConstraintRef[con])
+end
 
 """Helper function to extract base name from variable reference"""
 _get_name(s::Symbol) = s
