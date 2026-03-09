@@ -550,31 +550,52 @@ end
 _get_name(s::Symbol) = s
 _get_name(e::Expr) = e.args[1]
 
-"""
-Replace occurrences of `target` symbol (with optional indexing) with `(target + model[residual_sym][indices])`.
-Handles both scalar references like `x` and indexed references like `x[i,j]`.
-The `model_sym` is the symbol referring to the model, and `residual_sym` is the Symbol for the residual.
-"""
-function _substitute_with_residual(expr, target::Symbol, model_sym, residual_sym::Symbol)
-	if expr isa Symbol
-		if expr == target
-			# Scalar variable: x -> (x + model[:x_J])
-			return :($expr + $model_sym[$(QuoteNode(residual_sym))])
-		end
-		return expr
-	elseif expr isa Expr
-		if expr.head == :ref && expr.args[1] == target
-			# Indexed variable: x[i,j] -> (x[i,j] + model[:x_J][i,j])
-			indices = expr.args[2:end]
-			residual_access = Expr(:ref, :($model_sym[$(QuoteNode(residual_sym))]), indices...)
-			return :($expr + $residual_access)
-		else
-			# Recurse into sub-expressions
-			new_args = [_substitute_with_residual(arg, target, model_sym, residual_sym) for arg in expr.args]
-			return Expr(expr.head, new_args...)
-		end
+_index_symbol(spec::Symbol) = spec
+function _index_symbol(spec::Expr)
+	if spec.head == :(=)
+		spec.args[1]
+	elseif spec.head == :call && spec.args[1] in (:∈, :in)
+		spec.args[2]
 	else
-		return expr
+		spec
+	end
+end
+
+"""
+Build the substitution target AST from the block's ref_vars specification.
+`x[t ∈ 2:3, s ∈ 1:2]` → `:(x[t, s])`, scalar `x` → `:x`.
+"""
+function _substitution_target(ref_vars)
+	base_sym = _get_name(ref_vars)
+	if isexpr(ref_vars, :ref)
+		index_symbols = [_index_symbol(spec) for spec in ref_vars.args[2:end]]
+		Expr(:ref, base_sym, index_symbols...)
+	else
+		base_sym
+	end
+end
+
+"""
+Replace occurrences of `target` in `expr` with `(target + model[residual_sym][indices])`.
+Handles both scalar references like `x` and indexed references like `x[i,j]`.
+"""
+_substitute_with_residual(expr, target, model_sym, residual_sym::Symbol) = expr
+
+function _substitute_with_residual(expr::Symbol, target::Symbol, model_sym, residual_sym::Symbol)
+	expr == target ? :($expr + $model_sym[$(QuoteNode(residual_sym))]) : expr
+end
+
+_is_ref_match(expr::Expr, target::Symbol) = expr.head == :ref && expr.args[1] == target
+_is_ref_match(expr::Expr, target::Expr) = expr.head == :ref && expr == target
+
+function _substitute_with_residual(expr::Expr, target, model_sym, residual_sym::Symbol)
+	if _is_ref_match(expr, target)
+		indices = expr.args[2:end]
+		residual_access = Expr(:ref, :($model_sym[$(QuoteNode(residual_sym))]), indices...)
+		:($expr + $residual_access)
+	else
+		new_args = [_substitute_with_residual(arg, target, model_sym, residual_sym) for arg in expr.args]
+		Expr(expr.head, new_args...)
 	end
 end
 
@@ -600,7 +621,7 @@ macro _block(container, ref_vars, constraint, extra...)
 	push!(code.args, :(SquareModels.copy_variable($residual_name, $base_sym)))
 
 	# Transform constraint: replace endo with (endo + model[:endo_J])
-	transformed_constraint = _substitute_with_residual(constraint, base_sym, model_expr, residual_symbol)
+	transformed_constraint = _substitute_with_residual(constraint, _substitution_target(ref_vars), model_expr, residual_symbol)
 
 	if isa(ref_vars, Symbol)
 		# Scalar variable case - single constraint

@@ -706,6 +706,38 @@ end
 			optimize!(m)
 			@test value(m[:GDP_J]) ≈ 50 atol=1e-6
 		end
+
+		@testset "Lagged self-reference" begin
+			# x[t] == x[t-1] + 1 with endo x[t] should only substitute x[t], not x[t-1].
+			m = Model(Ipopt.Optimizer)
+			@variable(m, x[1:3])
+			b6 = @block m begin
+				x[t ∈ 2:3], x[t] == x[t-1] + 1
+			end
+			@test haskey(m, :x_J)
+			fix.(x, [10.0, 20.0, 30.0], force=true)
+			unfix.(m[:x_J][2:3])
+			optimize!(m)
+			@test value(m[:x_J][2]) ≈ -9 atol=1e-6
+			@test value(m[:x_J][3]) ≈ -9 atol=1e-6
+		end
+
+		@testset "Lagged self-reference with additional leading index" begin
+			# x[s,t] == x[s,t-1] + 1 with endo x[s,t] should not substitute x[s,t-1].
+			m = Model(Ipopt.Optimizer)
+			@variable(m, x[1:2, 1:3])
+			b7 = @block m begin
+				x[s ∈ 1:2, t ∈ 2:3], x[s, t] == x[s, t-1] + 1
+			end
+			@test haskey(m, :x_J)
+			fix.(x, [10.0 20.0 30.0; 40.0 50.0 60.0], force=true)
+			unfix.(m[:x_J][:, 2:3])
+			optimize!(m)
+			@test value(m[:x_J][1, 2]) ≈ -9 atol=1e-6
+			@test value(m[:x_J][1, 3]) ≈ -9 atol=1e-6
+			@test value(m[:x_J][2, 2]) ≈ -9 atol=1e-6
+			@test value(m[:x_J][2, 3]) ≈ -9 atol=1e-6
+		end
 	end
 
 	@testset "residuals(model) collects all residuals" begin
