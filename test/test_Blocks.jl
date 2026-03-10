@@ -855,4 +855,49 @@ end
 	@test t < 5.0  # Should be well under 1 second, but allow margin for CI
 end
 
+@testset "SparseAxisArray with tuple destructuring" begin
+	pairs = [(:a, :b), (:c, :d)]
+	pairs_set = Set(pairs)
+
+	@testset "@_block" begin
+		m = Model()
+		@variable(m, s[i=[:a, :c], d=[:b, :d], t=1:2; (i, d) in pairs_set])
+		@test s isa SparseAxisArray
+
+		v, r, cons = SquareModels.@_block(m, s[(i_e, d_e) = pairs, t ∈ 1:2], s[i_e, d_e, t] == 1)
+		@test length(v) == 4
+		@test all(isa.(v, VariableRef))
+	end
+
+	@testset "@block" begin
+		m = Model(Ipopt.Optimizer)
+		@variable(m, s[i=[:a, :c], d=[:b, :d], t=1:2; (i, d) in pairs_set])
+
+		b = @block m begin
+			s[(i_e, d_e) = pairs, t ∈ 1:2], s[i_e, d_e, t] == 1
+		end
+		@test length(b) == 4
+		@test all(is_endogenous(s[i, d, t], b) for (i, d) in pairs for t in 1:2)
+	end
+
+	@testset "residual substitution" begin
+		m = Model(Ipopt.Optimizer)
+		@variable(m, s[i=[:a, :c], d=[:b, :d], t=1:2; (i, d) in pairs_set])
+
+		b = @block m begin
+			s[(i_e, d_e) = pairs, t ∈ 1:2], s[i_e, d_e, t] == 5
+		end
+		@test haskey(m, :s_J)
+		@test m[:s_J] isa SparseAxisArray
+
+		for (i, d) in pairs, t in 1:2
+			fix(s[i, d, t], 3, force=true)
+		end
+		unfix.(m[:s_J])
+		optimize!(m)
+		# (3 + s_J) == 5 => s_J == 2
+		@test all(value(m[:s_J][i, d, t]) ≈ 2 for (i, d) in pairs for t in 1:2)
+	end
+end
+
 end # Module

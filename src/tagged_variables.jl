@@ -32,7 +32,7 @@
 
 A trait-like tag for categorizing variables, following Julia's Holy trait pattern.
 
-Tags are used to mark variables with properties like "growth adjusted" or 
+Tags are used to mark variables with properties like "growth adjusted" or
 "inflation adjusted", enabling trait-based dispatch and grouping.
 
 # Example
@@ -146,12 +146,12 @@ function _parse_var_line(expr)
             return _parse_var_line(expr.args[1])
         end
     end
-    
+
     # Simple variable: just a symbol or ref
     if expr isa Symbol || isexpr(expr, :ref)
         return (expr, [], "")
     end
-    
+
     # Type annotation expression: var[t] :: tag or var[t] :: (tag1, tag2)
     if isexpr(expr, :(::))
         var_def = expr.args[1]
@@ -164,7 +164,7 @@ function _parse_var_line(expr)
         end
         return (var_def, tag_exprs, "")
     end
-    
+
     # Fallback: treat whole thing as var definition
     return (expr, [], "")
 end
@@ -244,49 +244,49 @@ Note: If you need JuMP's original `@variables` macro, use `JuMP.@variables` expl
 macro variables(container_expr, block)
     # Parse block-level tags from container expression
     container, block_tag_exprs = _parse_block_tags(container_expr)
-    
+
     # Validate block structure
     if !isexpr(block, :block)
         error("@variables requires a begin...end block")
     end
-    
+
     code = Expr(:block)
     model_expr = :($container isa ModelDictionary ? $container.model : $container)
     var_names = Symbol[]
-    
+
     for line in block.args
         # Skip line numbers
         if line isa LineNumberNode
             push!(code.args, line)  # Preserve for error messages
             continue
         end
-        
+
         # Parse the line
         var_def, var_tag_exprs, desc = _parse_var_line(line)
         var_name = _get_name(var_def)
         push!(var_names, var_name)
-        
+
         # Generate @variable call
         push!(code.args, :(JuMP.@variable($model_expr, $var_def)))
-        
+
         # Combine block-level and variable-level tags
         all_tag_exprs = vcat(block_tag_exprs, var_tag_exprs)
-        
+
         # Register metadata
         if !isempty(all_tag_exprs) || !isempty(desc)
             tags_tuple = Expr(:tuple, all_tag_exprs...)
             push!(code.args, :(
-                SquareModels._variable_metadata[$(QuoteNode(var_name))] = 
+                SquareModels._variable_metadata[$(QuoteNode(var_name))] =
                     SquareModels.VariableMetadata([$tags_tuple...], $desc)
             ))
         else
             push!(code.args, :(
-                SquareModels._variable_metadata[$(QuoteNode(var_name))] = 
+                SquareModels._variable_metadata[$(QuoteNode(var_name))] =
                     SquareModels.VariableMetadata()
             ))
         end
     end
-    
+
     # Return named tuple of variables (like JuMP.@variables)
     if length(var_names) == 1
         push!(code.args, var_names[1])
@@ -294,6 +294,6 @@ macro variables(container_expr, block)
         named_tuple = Expr(:tuple, [Expr(:(=), n, n) for n in var_names]...)
         push!(code.args, named_tuple)
     end
-    
+
     return esc(code)
 end
