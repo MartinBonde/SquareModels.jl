@@ -7,6 +7,7 @@ using Test
 	include("test_build_model.jl")
 	include("test_integration.jl")
 	include("test_tagged_variables.jl")
+	include("test_SparseZero.jl")
 
 	@testset "Examples" begin
 		@testset "quick_example.jl" begin
@@ -14,6 +15,9 @@ using Test
 		end
 		@testset "modular_example.jl" begin
 			include("../examples/modular_example.jl")
+		end
+		@testset "optimization_example.jl" begin
+			include("../examples/optimization_example.jl")
 		end
 	end
 end;

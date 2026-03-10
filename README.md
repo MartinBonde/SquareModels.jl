@@ -137,6 +137,12 @@ calibration = sum(m.define_calibration() for m in submodels)
 baseline = solve(calibration, data; replace_nothing=1.0)
 ```
 
+## Optimization
+
+Since `@block` adds constraints directly to the JuMP model, you can use standard JuMP features — objectives, extra variables, additional constraints — to build non-square optimization problems on top of a square model. A typical use case is minimum distance estimation: treat a parameter as a free variable and minimize the distance between model predictions and observed data.
+
+> 📄 Full example: [`examples/optimization_example.jl`](examples/optimization_example.jl)
+
 ## Key Concepts
 
 ### Blocks
@@ -234,7 +240,8 @@ SquareModels/
 │   └── utils.jl              # Helper functions
 ├── examples/
 │   ├── quick_example.jl      # Simple labor market model
-│   └── modular_example.jl    # Modular CGE model example
+│   ├── modular_example.jl    # Modular CGE model example
+│   └── optimization_example.jl # Minimum distance estimation
 └── test/
     └── runtests.jl
 ```
