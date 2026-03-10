@@ -227,12 +227,50 @@ tagged(GrowthAdjusted)          # [:qGDP, :qC, :vGDP]
 
 Note: SquareModels provides its own `@variables` macro that extends JuMP's version with tags and descriptions. If you need JuMP's original macro, use `JuMP.@variables`.
 
+### SparseZeroArray
+
+When `@variables` creates a `SparseAxisArray` (i.e. a variable with conditional indices), it is automatically wrapped in a `SparseZeroArray`. Missing index combinations return a no-op `Zero()` sentinel instead of throwing a `KeyError`:
+
+```julia
+@variables data.model begin
+    x[i=1:5, j=1:5; i <= j], "Upper triangular variable"
+end
+
+x[1, 2]  # VariableRef (exists)
+x[3, 1]  # Zero() (missing but within domain — safe to use in sums)
+x[6, 1]  # Error (out of domain — catches typos)
+```
+
+This eliminates the need for filter clauses when summing over sparse dimensions:
+
+```julia
+# Without SparseZeroArray — requires filtering
+total = sum(x[i, j] for i in 1:5, j in 1:5 if haskey(x, (i, j)))
+
+# With SparseZeroArray — just sum directly
+total = ∑(x[i, j] for i in 1:5, j in 1:5)
+```
+
+The `∑` function is a convenience wrapper around `sum` that uses `Zero()` as the initial value, so summing over empty or all-missing dimensions works without errors.
+
+To access the underlying `SparseAxisArray`, use `x.data`.
+
+#### Disabling SparseZeroArray
+
+If you prefer standard JuMP `SparseAxisArray` behavior, disable the auto-wrapping:
+
+```julia
+use_sparse_zero_array!(false)  # @variables will create plain SparseAxisArrays
+use_sparse_zero_array!(true)   # Re-enable (default)
+```
+
 ## Project Structure
 
 ```
 SquareModels/
 ├── src/
 │   ├── SquareModels.jl       # Main module: Block, @block, @endo_exo!
+│   ├── SparseZeroArrays.jl   # Domain-aware sparse arrays with zero default
 │   ├── endo_exo.jl           # Endo-exo swap implementation
 │   ├── ModelDictionaries.jl  # Variable-value mappings
 │   ├── solve.jl              # Solve functions
