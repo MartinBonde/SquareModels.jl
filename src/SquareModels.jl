@@ -597,7 +597,22 @@ function _substitute_with_residual(expr::Symbol, target::Symbol, model_sym, resi
 end
 
 _is_ref_match(expr::Expr, target::Symbol) = expr.head == :ref && expr.args[1] == target
-_is_ref_match(expr::Expr, target::Expr) = expr.head == :ref && expr == target
+function _is_ref_match(expr::Expr, target::Expr)
+	expr.head == :ref || return false
+	expr == target && return true
+	_flatten_ref(expr) == _flatten_ref(target)
+end
+
+"""Flatten tuple indices in a :ref expression for comparison.
+`:(x[(i,d), t])` → `:(x[i, d, t])`"""
+function _flatten_ref(e::Expr)
+	e.head == :ref || return e
+	args = Any[e.args[1]]
+	for a in e.args[2:end]
+		isexpr(a, :tuple) ? append!(args, a.args) : push!(args, a)
+	end
+	Expr(:ref, args...)
+end
 
 function _substitute_with_residual(expr::Expr, target, model_sym, residual_sym::Symbol)
 	if _is_ref_match(expr, target)
@@ -614,9 +629,19 @@ end
 _all_keys(c::AbstractArray) = vec(collect(Iterators.product(axes(c)...)))
 _all_keys(c::SparseAxisArray) = collect(keys(c.data))
 
-"""Flatten nested tuples from constraint keys to match variable dimensions.
-E.g. `((:a, :b), 1)` from tuple destructuring becomes `(:a, :b, 1)` for a 3D SparseAxisArray."""
+"""Flatten nested tuples in a key.
+E.g. `((:a, :b), 1)` becomes `(:a, :b, 1)`."""
 _flatten_key(k::Tuple) = tuple(Iterators.flatten(map(x -> x isa Tuple ? x : (x,), k))...)
+
+"""Index a variable with a constraint key, flattening only when the variable has more dimensions.
+Handles the difference between `x[a,b,t]` (3D) and `y[(a,b),t]` (2D with tuple index)."""
+_ndims(v::SparseAxisArray{T,N}) where {T,N} = N
+_ndims(v::AbstractArray) = ndims(v)
+function _index_var(var, k::Tuple)
+	fk = _flatten_key(k)
+	fk === k && return var[k...]
+	_ndims(var) == length(fk) ? var[fk...] : var[k...]
+end
 
 """Extract the JuMP model from a container (ModelDictionary or Model)"""
 _get_model(m::AbstractModel) = m
@@ -658,8 +683,8 @@ macro _block(container, ref_vars, constraint, extra...)
 			let _m = $model_expr
 				cons = JuMP.@constraint(_m, $constraint_symbol[$(indices...)], $transformed_constraint, $(extra...))
 				_ks = SquareModels._all_keys(cons)
-				endos = [$base_sym[SquareModels._flatten_key(k)...] for k in _ks]
-				resids = [_m[$(QuoteNode(residual_symbol))][SquareModels._flatten_key(k)...] for k in _ks]
+				endos = [SquareModels._index_var($base_sym, k) for k in _ks]
+				resids = [SquareModels._index_var(_m[$(QuoteNode(residual_symbol))], k) for k in _ks]
 				con_refs = ConstraintRef[cons[k...] for k in _ks]
 				(endos, resids, con_refs)
 			end

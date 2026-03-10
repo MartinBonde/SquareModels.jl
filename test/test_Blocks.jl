@@ -900,4 +900,48 @@ end
 	end
 end
 
+@testset "DenseAxisArray with tuple indices" begin
+	pairs = [(:a, :b), (:c, :d)]
+
+	@testset "@_block" begin
+		m = Model()
+		@variable(m, y[pairs, 1:2])
+		@test y isa DenseAxisArray
+
+		v, r, cons = SquareModels.@_block(m, y[(i_e, d_e) = pairs, t ∈ 1:2], y[(i_e, d_e), t] == 1)
+		@test length(v) == 4
+		@test all(isa.(v, VariableRef))
+	end
+
+	@testset "@block" begin
+		m = Model(Ipopt.Optimizer)
+		@variable(m, y[pairs, 1:2])
+
+		b = @block m begin
+			y[(i_e, d_e) = pairs, t ∈ 1:2], y[(i_e, d_e), t] == 1
+		end
+		@test length(b) == 4
+		@test all(is_endogenous(y[(i, d), t], b) for (i, d) in pairs for t in 1:2)
+	end
+
+	@testset "residual substitution" begin
+		m = Model(Ipopt.Optimizer)
+		@variable(m, y[pairs, 1:2])
+
+		b = @block m begin
+			y[(i_e, d_e) = pairs, t ∈ 1:2], y[(i_e, d_e), t] == 5
+		end
+		@test haskey(m, :y_J)
+		@test m[:y_J] isa DenseAxisArray
+
+		for (i, d) in pairs, t in 1:2
+			fix(y[(i, d), t], 3, force=true)
+		end
+		unfix.(m[:y_J])
+		optimize!(m)
+		# (3 + y_J) == 5 => y_J == 2
+		@test all(value(m[:y_J][(i, d), t]) ≈ 2 for (i, d) in pairs for t in 1:2)
+	end
+end
+
 end # Module
