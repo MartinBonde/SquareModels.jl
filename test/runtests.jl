@@ -7,7 +7,7 @@ using Test
 	include("test_build_model.jl")
 	include("test_integration.jl")
 	include("test_tagged_variables.jl")
-	include("test_SparseZero.jl")
+	include("test_SparseZeroArray.jl")
 
 	@testset "Examples" begin
 		@testset "quick_example.jl" begin

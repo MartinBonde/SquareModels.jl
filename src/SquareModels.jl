@@ -16,6 +16,7 @@ export unload, load
 export RESIDUAL_SUFFIX
 export solve, solve!
 export Tag, description, tags, has_tag, tagged, metadata
+export SparseZeroArray, ∑, use_sparse_zero_array!
 
 # Constraints are named after the associated endogenous variable
 # A prefix is added as a constraint and variable cannot share the same name
@@ -36,6 +37,7 @@ using JuMP: set_name, name, variable_by_name, fix, is_fixed, unfix, unregister, 
 using JuMP: list_of_constraint_types, all_constraints, is_valid, object_dictionary
 
 include("utils.jl")
+include("SparseZeroArrays.jl")
 
 """
     collect_variables!(vars::Set{VariableRef}, expr) → Set{VariableRef}
@@ -61,7 +63,7 @@ function collect_variables!(vars::Set{VariableRef}, expr)
     end
     return vars
 end
-collect_variables!(vars::Set{VariableRef}, ::Number) = vars
+collect_variables!(vars::Set{VariableRef}, ::Union{Number, Zero}) = vars
 
 """
     Block
@@ -628,6 +630,7 @@ end
 """Collect index tuples from a JuMP container in iteration order."""
 _all_keys(c::AbstractArray) = vec(collect(Iterators.product(axes(c)...)))
 _all_keys(c::SparseAxisArray) = collect(keys(c.data))
+_all_keys(c::SparseZeroArray) = _all_keys(c.data)
 
 """Flatten nested tuples in a key.
 E.g. `((:a, :b), 1)` becomes `(:a, :b, 1)`."""
@@ -636,6 +639,7 @@ _flatten_key(k::Tuple) = tuple(Iterators.flatten(map(x -> x isa Tuple ? x : (x,)
 """Index a variable with a constraint key, flattening only when the variable has more dimensions.
 Handles the difference between `x[a,b,t]` (3D) and `y[(a,b),t]` (2D with tuple index)."""
 _ndims(v::SparseAxisArray{T,N}) where {T,N} = N
+_ndims(v::SparseZeroArray{T,N}) where {T,N} = N
 _ndims(v::AbstractArray) = ndims(v)
 function _index_var(var, k::Tuple)
 	fk = _flatten_key(k)
@@ -840,6 +844,9 @@ function copy_variable(new_name::String, original::AbstractVariableRef)
 	end
 	return m[sym]
 end
+copy_variable(new_name::String, original::SparseZeroArray) = copy_variable(new_name, original.data)
+
+base_name(var::SparseZeroArray) = base_name(first(var))
 
 """
     unfix(b::Block)

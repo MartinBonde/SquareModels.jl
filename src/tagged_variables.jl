@@ -188,6 +188,38 @@ function _parse_block_tags(expr)
 end
 
 # ==============================================================================
+# Index set extraction for SparseZeroArray auto-wrapping
+# ==============================================================================
+
+"""Extract the set expression (RHS) from an index specification in a variable definition."""
+_index_set(spec::Symbol) = spec
+function _index_set(spec::Expr)
+    if spec.head in (:(=), :kw)
+        spec.args[2]
+    elseif spec.head == :call && spec.args[1] in (:∈, :in)
+        spec.args[3]
+    else
+        spec
+    end
+end
+
+"""
+Extract index set expressions from a :ref variable definition.
+Returns a vector of expressions that evaluate to the index sets at runtime.
+Skips :parameters (semicolon conditions).
+"""
+function _extract_index_sets(var_def::Expr)
+    isexpr(var_def, :ref) || return []
+    sets = []
+    for spec in var_def.args[2:end]
+        isexpr(spec, :parameters) && continue
+        push!(sets, _index_set(spec))
+    end
+    return sets
+end
+_extract_index_sets(::Symbol) = []
+
+# ==============================================================================
 # @variables Macro
 # ==============================================================================
 """
@@ -268,6 +300,18 @@ macro variables(container_expr, block)
 
         # Generate @variable call
         push!(code.args, :(JuMP.@variable($model_expr, $var_def)))
+
+        # Auto-wrap SparseAxisArray in SparseZeroArray with domain sets (if enabled)
+        index_sets = _extract_index_sets(var_def)
+        if !isempty(index_sets)
+            sets_expr = Expr(:tuple, [:(Set($s)) for s in index_sets]...)
+            push!(code.args, :(
+                if SquareModels._use_sparse_zero_array[]
+                    $var_name = $var_name isa JuMP.Containers.SparseAxisArray ?
+                        SquareModels.SparseZeroArray($var_name, $sets_expr) : $var_name
+                end
+            ))
+        end
 
         # Combine block-level and variable-level tags
         all_tag_exprs = vcat(block_tag_exprs, var_tag_exprs)

@@ -180,6 +180,9 @@ function Base.getindex(d::ModelDictionary, container::AbstractArray{Symbol}, var
 	data_view = @view(d.dictionary.values[idx])
 	return create_window(data_view, container, varname)
 end
+Base.getindex(d::ModelDictionary, s::SparseZeroArray) = getindex(d, s.data)
+Base.setindex!(d::ModelDictionary, value, s::SparseZeroArray) = setindex!(d, value, s.data)
+
 function Base.getindex(d::ModelDictionary, container::AbstractArray{<:AbstractVariableRef})
 	# Extract variable base name from the first element
 	varname = isempty(container) ? nothing : Symbol(split(name(first(container)), "[")[1])

@@ -14,7 +14,6 @@ using SquareModels
 # Model and data container
 # ------------------------------------------------------------------------------
 data = ModelDictionary(Model(Ipopt.Optimizer))
-set_silent(data.model)
 
 # ------------------------------------------------------------------------------
 # Sets

@@ -18,7 +18,6 @@ using SquareModels
 # Global model container and time configuration
 # ==============================================================================
 db = ModelDictionary(Model(Ipopt.Optimizer))
-set_silent(db.model)
 
 # Time configuration (T is non-const for T-loop calibration)
 const t₀ = 2020    # First year for variable definitions
