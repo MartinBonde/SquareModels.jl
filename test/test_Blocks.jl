@@ -3,7 +3,7 @@ module TestSquareModels
 using Test
 using JuMP
 using SquareModels
-using JuMP.Containers: DenseAxisArray
+using JuMP.Containers: DenseAxisArray, SparseAxisArray
 using Ipopt
 
 @testset "copy_variable" begin
@@ -19,6 +19,16 @@ using Ipopt
 	J_y = SquareModels.copy_variable("J_y", y)
 	@test J_y == m[:J_y]
 	@test length(J_y) == length(y)
+
+	@testset "SparseAxisArray" begin
+		@variable(m, s[i=1:3, j=1:3; i != j])
+		@test s isa SparseAxisArray
+
+		J_s = SquareModels.copy_variable("J_s", s)
+		@test J_s == m[:J_s]
+		@test J_s isa SparseAxisArray
+		@test length(J_s) == length(s)
+	end
 end
 
 @testset "@_block" begin
@@ -152,6 +162,27 @@ end
 		@test !any(is_fixed.(y))
 		@test all(is_fixed.(y_exo))
 		unfix(b)
+	end
+
+	@testset "SparseAxisArray" begin
+		m2 = Model(Ipopt.Optimizer)
+		@variable(m2, s[i=1:3, j=1:3; i != j])
+		@variable(m2, s_exo[i=1:3, j=1:3; i != j])
+
+		b2 = @block m2 begin
+			s[i ∈ 1:3, j ∈ 1:3; i != j], s[i, j] + s_exo[i, j] == 1
+		end
+
+		SquareModels._endo_exo!(b2, s_exo, s, "")
+		fix.(b2, 1)
+		@test !any(is_fixed(s[i, j]) for (i, j) in keys(s.data))
+		@test all(is_fixed(s_exo[i, j]) for (i, j) in keys(s_exo.data))
+		# Verify correct pairing: each s_exo[i,j] replaced the matching s[i,j]
+		for (i, j) in keys(s.data)
+			@test is_endogenous(s_exo[i, j], b2)
+			@test !is_endogenous(s[i, j], b2)
+		end
+		unfix(b2)
 	end
 end
 
@@ -587,6 +618,20 @@ end
 		@test all(is_fixed.(m[:z_J]))
 		res = residuals(b)
 		@test length(res) == 4
+	end
+
+	@testset "SparseAxisArray residual" begin
+		m_sparse = Model()
+		@variable(m_sparse, s[i=1:3, j=1:3; i != j])
+		@test s isa SparseAxisArray
+
+		b = @block m_sparse begin
+			s[i ∈ 1:3, j ∈ 1:3; i != j], s[i, j] == i + j
+		end
+		@test haskey(m_sparse, :s_J)
+		@test m_sparse[:s_J] isa SparseAxisArray
+		@test length(residuals(b)) == 6
+		@test all(is_fixed.(m_sparse[:s_J]))
 	end
 
 	@testset "Partial index range uses full residual" begin

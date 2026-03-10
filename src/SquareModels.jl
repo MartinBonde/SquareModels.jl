@@ -30,7 +30,7 @@ using StatsBase: countmap
 using Lazy
 using JuMP: JuMP, AbstractModel, AbstractVariableRef, VariableRef, ConstraintRef, Containers
 using JuMP: AffExpr, QuadExpr, NonlinearExpr
-using JuMP.Containers: DenseAxisArray
+using JuMP.Containers: DenseAxisArray, SparseAxisArray
 using JuMP: @variable, @constraint, constraint_object
 using JuMP: set_name, name, variable_by_name, fix, is_fixed, unfix, unregister, all_variables, value, set_start_value
 using JuMP: list_of_constraint_types, all_constraints, is_valid, object_dictionary
@@ -599,6 +599,10 @@ function _substitute_with_residual(expr::Expr, target, model_sym, residual_sym::
 	end
 end
 
+"""Collect index tuples from a JuMP container in iteration order."""
+_all_keys(c::AbstractArray) = vec(collect(Iterators.product(axes(c)...)))
+_all_keys(c::SparseAxisArray) = collect(keys(c.data))
+
 """Extract the JuMP model from a container (ModelDictionary or Model)"""
 _get_model(m::AbstractModel) = m
 # _get_model for ModelDictionary is defined after ModelDictionaries.jl is included
@@ -638,9 +642,10 @@ macro _block(container, ref_vars, constraint, extra...)
 		macrocall = quote
 			let _m = $model_expr
 				cons = JuMP.@constraint(_m, $constraint_symbol[$(indices...)], $transformed_constraint, $(extra...))
-				endos = [$base_sym[axes(cons)...]...]
-				resids = [_m[$(QuoteNode(residual_symbol))][axes(cons)...]...]
-				con_refs = ConstraintRef[cons[axes(cons)...]...]
+				_ks = SquareModels._all_keys(cons)
+				endos = [$base_sym[k...] for k in _ks]
+				resids = [_m[$(QuoteNode(residual_symbol))][k...] for k in _ks]
+				con_refs = ConstraintRef[cons[k...] for k in _ks]
 				(endos, resids, con_refs)
 			end
 		end
@@ -757,7 +762,21 @@ base_name(var::AbstractArray{T}) where {T<:AbstractVariableRef} = base_name(firs
 """
 If a variable Symbol(new_name) does not exist, define a new variable with the same indices as an existing variable.
 """
-function copy_variable(new_name::String, original)
+function copy_variable(new_name::String, original::SparseAxisArray)
+	m = first(original).model
+	sym = Symbol(new_name)
+	if !haskey(m, sym)
+	    d = Dict(k => VariableRef(m) for k in keys(original.data))
+	    new = SparseAxisArray(d)
+	    for k in keys(original.data)
+	        set_name(new[k...], new_name * split_name(original[k...])[2])
+	    end
+	    m[sym] = new
+	    fix.(new, 0)
+	end
+	return m[sym]
+end
+function copy_variable(new_name::String, original::AbstractArray)
 	m = first(original).model
 	sym = Symbol(new_name)
 	if !haskey(m, sym)
