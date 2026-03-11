@@ -824,7 +824,8 @@ function copy_variable(new_name::String, original::AbstractArray)
 	m = first(original).model
 	sym = Symbol(new_name)
 	if !haskey(m, sym)
-	    new = DenseAxisArray([VariableRef(m) for _ in _all_keys(original)], axes(original)...)
+	    data = reshape([VariableRef(m) for _ in _all_keys(original)], length.(axes(original))...)
+	    new = DenseAxisArray(data, axes(original)...)
 	    for (x, y) in zip(new, original)
 	        set_name(x, new_name * split_name(y)[2])
 	    end
