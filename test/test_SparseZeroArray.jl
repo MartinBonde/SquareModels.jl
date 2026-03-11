@@ -232,6 +232,25 @@ end
     @test !(m2[:x2] isa SparseZeroArray)
 end
 
+@testset "block-level tags with tuple membership filter" begin
+    m = Model()
+    T = Tag(:test_tag)
+    I = [:a, :b, :c]
+    D = [:x, :y]
+    valid = Set([(:a, :x), (:b, :y), (:c, :x)])
+
+    @variables m :: T begin
+        v[i=I, d=D; (i, d) in valid], "Test var"
+        w[I], "Dense var"
+    end
+
+    @test v isa SparseZeroArray
+    @test m[:v] isa SparseZeroArray
+    @test v[:a, :x] isa JuMP.VariableRef
+    @test v[:a, :y] isa SquareModels.Zero  # missing but in domain
+    @test_throws ErrorException v[:z, :x]  # out of domain
+end
+
 @testset "@block with SparseZeroArray and ∑" begin
     m = Model(Ipopt.Optimizer)
 
