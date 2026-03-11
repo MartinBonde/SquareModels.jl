@@ -164,6 +164,34 @@ use_sparse_zero_array!(enabled::Bool=true) = (_use_sparse_zero_array[] = enabled
 _domain_from_keys(saa::SparseAxisArray{T,N}) where {T,N} =
     ntuple(dim -> Set(k[dim] for k in keys(saa.data)), N)
 
+"""
+    _domain_from_nested(ni::Containers.NestedIterator, N)
+
+Extract per-dimension domains from a `NestedIterator`'s base iterators,
+ignoring the filter condition. This gives the full "original" domain for
+each dimension, so that indices filtered out by the condition still pass
+domain checks (and return `Zero()`) rather than throwing.
+"""
+function _domain_from_nested(ni::Containers.NestedIterator, N::Int)
+    domains = ntuple(_ -> Set(), N)
+    _collect_nested_domains!(domains, ni.iterators, 1, ())
+    return domains
+end
+
+function _collect_nested_domains!(domains, iterators, dim, prev_args)
+    dim > length(iterators) && return
+    for val in iterators[dim](prev_args...)
+        push!(domains[dim], val)
+        _collect_nested_domains!(domains, iterators, dim + 1, (prev_args..., val))
+    end
+end
+
+function Containers.container(f::Function, indices::Containers.NestedIterator, ::Type{SparseZeroArray})
+    saa = Containers.container(f, indices, SparseAxisArray)
+    N = length(indices.iterators)
+    return SparseZeroArray(saa, _domain_from_nested(indices, N))
+end
+
 function Containers.container(f::Function, indices, ::Type{SparseZeroArray})
     saa = Containers.container(f, indices, SparseAxisArray)
     return SparseZeroArray(saa, _domain_from_keys(saa))

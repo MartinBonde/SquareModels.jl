@@ -170,6 +170,36 @@ end
     @test_throws ErrorException x[:z, :b, 1]
 end
 
+@testset "SparseZeroArray domain covers full index sets, not just filtered keys" begin
+    m = Model()
+    I = [:a, :b, :c]
+    D = [:x, :y, :z]
+    # Only (:a,:x), (:a,:y), (:b,:x) survive the filter
+    # :c is absent from ALL keys in dim 1, :z is absent from ALL keys in dim 2
+    valid = Set([(:a, :x), (:a, :y), (:b, :x)])
+
+    @variables m begin
+        v[i=I, d=D; (i, d) in valid], "Filtered sparse var"
+    end
+
+    @test v isa SparseZeroArray
+    @test v[:a, :x] isa VariableRef
+
+    # :c never appears in any key but IS in the original index set I → Zero()
+    @test v[:c, :x] isa SquareModels.Zero
+    @test v[:c, :z] isa SquareModels.Zero
+    # :z never appears in any key but IS in the original index set D → Zero()
+    @test v[:b, :z] isa SquareModels.Zero
+
+    # Out of original domain — should still error
+    @test_throws ErrorException v[:d, :x]
+    @test_throws ErrorException v[:a, :w]
+
+    # ∑ over full index set should work even when some values are absent from keys
+    result = ∑(v[i, :x] for i in I)
+    @test result isa AffExpr
+end
+
 @testset "ModelDictionary with SparseZeroArray" begin
     m = Model()
     @variables m begin
