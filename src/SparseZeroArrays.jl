@@ -20,6 +20,14 @@ Base.zero(::Type{Zero}) = Zero()
 Base.iszero(::Zero) = true
 Base.show(io::IO, ::Zero) = print(io, "Zero()")
 
+# MutableArithmetics / JuMP integration — Zero() is a no-op in expression building
+JuMP.add_to_expression!(expr::AffExpr, ::Zero) = expr
+JuMP.add_to_expression!(expr::AffExpr, ::Any, ::Zero) = expr
+JuMP.add_to_expression!(expr::AffExpr, ::Zero, ::Any) = expr
+JuMP.add_to_expression!(expr::QuadExpr, ::Zero) = expr
+JuMP.add_to_expression!(expr::QuadExpr, ::Any, ::Zero) = expr
+JuMP.add_to_expression!(expr::QuadExpr, ::Zero, ::Any) = expr
+
 # ==============================================================================
 # SparseZeroArray — domain-aware wrapper for SparseAxisArray with zero default
 # ==============================================================================
