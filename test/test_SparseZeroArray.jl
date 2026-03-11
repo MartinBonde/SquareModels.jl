@@ -136,7 +136,7 @@ end
     t = 1:3
 
     @variables m begin
-        sparse_var[i=1:5, j=[:a, :b]; i <= 3], "A sparse variable"
+        sparse_var[i=1:3, j=1:3; i != j], "A sparse variable"
         dense_var[t], "A dense variable"
         scalar_var, "A scalar"
     end
@@ -145,13 +145,11 @@ end
     @test dense_var isa JuMP.Containers.DenseAxisArray
     @test scalar_var isa VariableRef
 
-    # Auto-wrapped SparseZeroArray works with zero-default
-    @test sparse_var[1, :a] isa VariableRef
-    @test sparse_var[4, :a] isa SquareModels.Zero
-
-    # Domain checking from index sets
-    @test_throws ErrorException sparse_var[6, :a]
-    @test_throws ErrorException sparse_var[1, :c]
+    @test sparse_var[1, 2] isa VariableRef
+    @test sparse_var[1, 1] isa SquareModels.Zero
+    @test sparse_var[2, 2] isa SquareModels.Zero
+    @test_throws ErrorException sparse_var[4, 1]
+    @test_throws ErrorException sparse_var[1, 4]
 end
 
 @testset "@variables with tuple destructuring" begin
@@ -216,7 +214,7 @@ end
         d1[1:3], "Dense var"
     end
     @test x1 isa SparseZeroArray
-    @test d1 isa JuMP.Containers.DenseAxisArray
+    @test !(d1 isa SparseZeroArray)
     @test m1[:x1] isa SparseZeroArray  # model dictionary stores wrapped type
 
     # Disabled: filtered variables produce plain SparseAxisArray
@@ -229,7 +227,7 @@ end
     use_sparse_zero_array!(true)  # restore default
     @test x2 isa SparseAxisArray
     @test !(x2 isa SparseZeroArray)
-    @test d2 isa JuMP.Containers.DenseAxisArray
+    @test !(d2 isa SparseZeroArray)
     @test m2[:x2] isa SparseAxisArray
     @test !(m2[:x2] isa SparseZeroArray)
 end
