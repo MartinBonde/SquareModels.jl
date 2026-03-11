@@ -15,6 +15,7 @@ Base.:*(_, ::Zero) = Zero()
 Base.:-(::Zero) = Zero()
 Base.:-(x, ::Zero) = x
 Base.:-(::Zero, x) = -x
+Base.:/(::Zero, _) = Zero()
 Base.zero(::Type{Zero}) = Zero()
 Base.iszero(::Zero) = true
 Base.show(io::IO, ::Zero) = print(io, "Zero()")
@@ -52,14 +53,37 @@ function Base.getindex(s::SparseZeroArray{T, N, KT}, args...) where {T, N, KT}
     end
 end
 
+# Mirror SparseAxisArray: size is intentionally unsupported (conceptually a dictionary)
+function Base.size(::SparseZeroArray)
+    return error(
+        "`Base.size` is not implemented for `SparseZeroArray` because " *
+        "although it is a subtype of `AbstractArray`, it is conceptually " *
+        "closer to a dictionary with `N`-dimensional keys. If you encounter " *
+        "this error and you didn't call `size` explicitly, it is because " *
+        "you called a method that is unsupported for `SparseZeroArray`s.",
+    )
+end
+
 Base.keys(s::SparseZeroArray) = keys(s.data)
 Base.haskey(s::SparseZeroArray, key) = haskey(s.data, key)
 Base.length(s::SparseZeroArray) = length(s.data)
-Base.iterate(s::SparseZeroArray) = iterate(s.data)
-Base.iterate(s::SparseZeroArray, state) = iterate(s.data, state)
+Base.IteratorSize(::Type{<:SparseZeroArray}) = Base.HasLength()
+Base.iterate(s::SparseZeroArray, args...) = iterate(s.data, args...)
 Base.first(s::SparseZeroArray) = first(s.data)
 Base.eltype(::Type{SparseZeroArray{T,N,KT}}) where {T,N,KT} = T
-Base.show(io::IO, s::SparseZeroArray) = print(io, "SparseZeroArray(", s.data, ")")
+Base.eachindex(s::SparseZeroArray) = keys(s.data.data)
+Base.hash(s::SparseZeroArray, h::UInt) = hash(s.data, h)
+Base.:(==)(s1::SparseZeroArray, s2::SparseZeroArray) = s1.data == s2.data
+Base.mapreduce(f, op, s::SparseZeroArray) = mapreduce(f, op, values(s.data.data))
+
+Base.similar(s::SparseZeroArray{S,N,KT}, ::Type{T}, length::Integer=0) where {S,T,N,KT} = similar(s.data, T, length)
+Base.BroadcastStyle(::Type{<:SparseZeroArray{T,N,KT}}) where {T,N,KT} = Base.BroadcastStyle(SparseAxisArray{T,N,KT})
+Base.Broadcast.broadcast_preserving_zero_d(f, A::SparseZeroArray, As...) = broadcast(f, A, As...)
+Base.Broadcast.broadcast_preserving_zero_d(f, x, A::SparseZeroArray, As...) = broadcast(f, x, A, As...)
+Base.Broadcast.broadcast_preserving_zero_d(f, A::SparseZeroArray, B::SparseZeroArray, args...) = broadcast(f, A, B, args...)
+
+Base.show(io::IO, s::SparseZeroArray) = show(io, s.data)
+Base.show(io::IO, mime::MIME"text/plain", s::SparseZeroArray) = show(io, mime, s.data)
 
 """
     ∑(args...; kwargs...)
@@ -95,4 +119,3 @@ use_sparse_zero_array!(true)
 ```
 """
 use_sparse_zero_array!(enabled::Bool=true) = (_use_sparse_zero_array[] = enabled; nothing)
-
