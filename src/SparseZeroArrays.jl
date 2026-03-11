@@ -100,8 +100,28 @@ Base.Broadcast.broadcast_preserving_zero_d(f, A::SparseZeroArray, As...) = broad
 Base.Broadcast.broadcast_preserving_zero_d(f, x, A::SparseZeroArray, As...) = broadcast(f, x, A, As...)
 Base.Broadcast.broadcast_preserving_zero_d(f, A::SparseZeroArray, B::SparseZeroArray, args...) = broadcast(f, A, B, args...)
 
-Base.show(io::IO, s::SparseZeroArray) = show(io, s.data)
-Base.show(io::IO, mime::MIME"text/plain", s::SparseZeroArray) = show(io, mime, s.data)
+function Base.summary(io::IO, s::SparseZeroArray)
+    num_entries = length(s)
+    return print(io, typeof(s), " with ", num_entries, isone(num_entries) ? " entry" : " entries")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", s::SparseZeroArray)
+    summary(io, s)
+    if !isempty(s.data.data)
+        println(io, ":")
+        show(io, s)
+    end
+    return
+end
+
+Base.show(io::IO, s::SparseZeroArray) = show(convert(IOContext, io), s)
+
+function Base.show(io::IOContext, s::SparseZeroArray)
+    if isempty(s)
+        return show(io, MIME("text/plain"), s)
+    end
+    show(io, s.data)
+end
 
 """
     ∑(args...; kwargs...)
@@ -137,3 +157,17 @@ use_sparse_zero_array!(true)
 ```
 """
 use_sparse_zero_array!(enabled::Bool=true) = (_use_sparse_zero_array[] = enabled; nothing)
+
+# ==============================================================================
+# JuMP custom container — create SparseZeroArray directly via @variable
+# ==============================================================================
+_domain_from_keys(saa::SparseAxisArray{T,N}) where {T,N} =
+    ntuple(dim -> Set(k[dim] for k in keys(saa.data)), N)
+
+function Containers.container(f::Function, indices, ::Type{SparseZeroArray})
+    saa = Containers.container(f, indices, SparseAxisArray)
+    return SparseZeroArray(saa, _domain_from_keys(saa))
+end
+
+Containers.container(f::Function, indices, ::Type{SparseZeroArray}, names) =
+    Containers.container(f, indices, SparseZeroArray)

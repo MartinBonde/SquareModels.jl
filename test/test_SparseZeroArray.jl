@@ -208,6 +208,32 @@ end
     @test all(is_endogenous(x.data[i, j], b) for i in 1:3, j in 1:3 if i != j)
 end
 
+@testset "use_sparse_zero_array! flag" begin
+    # Enabled (default): filtered variables produce SparseZeroArray
+    m1 = Model()
+    @variables m1 begin
+        x1[i=1:3, j=1:3; i != j], "Sparse var"
+        d1[1:3], "Dense var"
+    end
+    @test x1 isa SparseZeroArray
+    @test d1 isa JuMP.Containers.DenseAxisArray
+    @test m1[:x1] isa SparseZeroArray  # model dictionary stores wrapped type
+
+    # Disabled: filtered variables produce plain SparseAxisArray
+    m2 = Model()
+    use_sparse_zero_array!(false)
+    @variables m2 begin
+        x2[i=1:3, j=1:3; i != j], "Sparse var"
+        d2[1:3], "Dense var"
+    end
+    use_sparse_zero_array!(true)  # restore default
+    @test x2 isa SparseAxisArray
+    @test !(x2 isa SparseZeroArray)
+    @test d2 isa JuMP.Containers.DenseAxisArray
+    @test m2[:x2] isa SparseAxisArray
+    @test !(m2[:x2] isa SparseZeroArray)
+end
+
 @testset "@block with SparseZeroArray and ∑" begin
     m = Model(Ipopt.Optimizer)
 
