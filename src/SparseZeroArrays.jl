@@ -36,6 +36,14 @@ still catching typos and invalid indices via domain checking.
 # Fields
 - `data::SparseAxisArray{T, N, KT}`: The underlying JuMP container
 - `domain::NTuple{N, Set}`: Valid values per dimension (for domain checking)
+
+# AbstractArray subtyping
+`SparseZeroArray` subtypes `AbstractArray` following JuMP's `SparseAxisArray` precedent, but
+intentionally violates the `AbstractArray` contract: `size` is unsupported (it's a dictionary,
+not a dense array) and `keys` returns dictionary keys (tuples) instead of `LinearIndices`.
+This is necessary because many functions in SquareModels and JuMP dispatch on `AbstractArray`
+(e.g. `ModelDictionary` indexing, `fix`, `set_start_value`, `Block` construction).
+Use `eachindex` to iterate over indices, which is the correct `AbstractArray` method for this.
 """
 struct SparseZeroArray{T, N, KT} <: AbstractArray{T, N}
     data::SparseAxisArray{T, N, KT}
@@ -64,7 +72,9 @@ function Base.size(::SparseZeroArray)
     )
 end
 
-Base.keys(s::SparseZeroArray) = keys(s.data)
+# Intentionally breaks AbstractArray contract: returns dictionary keys (tuples) not LinearIndices.
+# The default AbstractArray `keys` calls `size` which is unsupported.
+Base.keys(s::SparseZeroArray) = keys(s.data.data)
 Base.haskey(s::SparseZeroArray, key) = haskey(s.data, key)
 Base.length(s::SparseZeroArray) = length(s.data)
 Base.IteratorSize(::Type{<:SparseZeroArray}) = Base.HasLength()
