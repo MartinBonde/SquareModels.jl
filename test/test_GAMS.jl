@@ -2,9 +2,10 @@ module TestGAMS
 
 using Test
 import JuMP
-using JuMP: Model, set_optimizer_attribute, @variable
+using JuMP: Model, set_optimizer_attribute, get_optimizer_attribute, @variable, unsafe_backend
 using SquareModels
 import GAMS
+import MathOptInterface as MOI
 
 # Probe whether the GAMS runtime (not just the Julia package) is installed
 const GAMS_AVAILABLE = try
@@ -40,6 +41,12 @@ if GAMS_AVAILABLE
         y, y == z^2
     end
     data[residuals(block)] .= 0.0
+
+    # Verify that _copy_model_config preserves GAMS-specific attributes
+    solve_model, _ = SquareModels._build_model(block, data)
+    inner = unsafe_backend(solve_model)
+    @test MOI.get(inner, MOI.RawOptimizerAttribute("NLP")) == "conopt"
+    @test MOI.get(inner, MOI.RawOptimizerAttribute("LogOption")) == 0
 
     solution = solve(block, data)
 

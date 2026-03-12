@@ -126,16 +126,9 @@ end
 # _build_model (internal)
 # ============================================================================
 
-# Create a new model with the same optimizer and all attributes (silent, time limit, solver-specific) as src
+# Create a new model with the same optimizer (including all solver-specific attributes) as src
 function _copy_model_config(src)
-    optimizer = typeof(unsafe_backend(src))
-    dest = Model(optimizer)
-    src_backend = backend(src)
-    dest_backend = backend(dest)
-    for attr in MOI.get(src_backend, MOI.ListOfOptimizerAttributesSet())
-        MOI.set(dest_backend, attr, MOI.get(src_backend, attr))
-    end
-    return dest
+    Model(() -> deepcopy(unsafe_backend(src)))
 end
 
 # Internal function to build a solve model from a block
