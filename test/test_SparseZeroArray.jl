@@ -16,6 +16,9 @@ using Ipopt
     @test 3 - z === 3
     @test iszero(z)
 
+    # Unary * (used by MutableArithmetics in JuMP constraint rewriting)
+    @test *(z) === z
+
     # Works with JuMP expressions
     m = Model()
     @variable(m, x)
@@ -24,6 +27,29 @@ using Ipopt
     expr = AffExpr(1.0, x => 2.0)
     @test expr + z === expr
     @test z + expr === expr
+end
+
+@testset "Zero in NonlinearExpr constraint (MutableArithmetics add_mul)" begin
+    m = Model(Ipopt.Optimizer)
+    @variables m begin
+        sparse[i=1:3, j=1:3; i <= j], "Sparse"
+        rate[1:3], "Rate parameter"
+        result[1:3], "Result"
+    end
+    @test sparse isa SparseZeroArray
+
+    # JuMP's MutableArithmetics @rewrite decomposes constraint expressions into
+    # operate!!(add_mul, accumulator, terms...) calls. When a SparseZeroArray
+    # lookup returns Zero() as a standalone additive term alongside a NonlinearExpr
+    # (e.g. from division), the call becomes operate!!(add_mul, NonlinearExpr, Zero())
+    # with a single vararg. JuMP's NonlinearExpr dispatch does *(args...) = *(Zero()),
+    # requiring unary * to be defined on Zero.
+    # Note: x*y produces QuadExpr, not NonlinearExpr, and QuadExpr is handled by
+    # add_to_expression! dispatches that already accept Zero().
+    b = @block m begin
+        result[i ∈ 1:3], result[i] / rate[i] + sparse[i, 1] == 0
+    end
+    @test length(b) == 3
 end
 
 @testset "SparseZeroArray construction" begin

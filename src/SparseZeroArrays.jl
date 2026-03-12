@@ -10,6 +10,7 @@ struct Zero end
 Base.:+(x, ::Zero) = x
 Base.:+(::Zero, x) = x
 Base.:+(::Zero, ::Zero) = Zero()
+Base.:*(::Zero) = Zero()
 Base.:*(::Zero, _) = Zero()
 Base.:*(_, ::Zero) = Zero()
 Base.:-(::Zero) = Zero()
