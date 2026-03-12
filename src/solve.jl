@@ -126,17 +126,14 @@ end
 # _build_model (internal)
 # ============================================================================
 
-# Create a new model with the same optimizer and attributes (silent, time limit) as src
+# Create a new model with the same optimizer and all attributes (silent, time limit, solver-specific) as src
 function _copy_model_config(src)
     optimizer = typeof(unsafe_backend(src))
     dest = Model(optimizer)
     src_backend = backend(src)
-    if MOI.get(src_backend, MOI.Silent())
-        set_silent(dest)
-    end
-    time_limit = MOI.get(src_backend, MOI.TimeLimitSec())
-    if time_limit !== nothing
-        set_time_limit_sec(dest, time_limit)
+    dest_backend = backend(dest)
+    for attr in MOI.get(src_backend, MOI.ListOfOptimizerAttributesSet())
+        MOI.set(dest_backend, attr, MOI.get(src_backend, attr))
     end
     return dest
 end
