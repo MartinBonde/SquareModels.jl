@@ -43,6 +43,8 @@ See also: [`fix`](@ref), [`set_start_value`](@ref), [`value_dict`](@ref)
 struct ModelDictionary
 	model::AbstractModel
 	dictionary::Dictionary{Symbol, Union{Nothing, Number}}
+	_synced_n_vars::Base.RefValue{Int}
+	ModelDictionary(model, dictionary) = new(model, dictionary, Ref(0))
 end
 @forward ModelDictionary.dictionary (
 	Base.keys,
@@ -146,12 +148,15 @@ to ensure the dictionary includes all model variables.
 New variables are initialized to `nothing`.
 """
 function add_missing_model_variables!(md::ModelDictionary)
+	n = JuMP.num_variables(md.model)
+	n == md._synced_n_vars[] && return
 	for v in all_variables(md.model)
 		sym = Symbol(name(v))
 		if sym ∉ keys(md.dictionary)
 			insert!(md.dictionary, sym, nothing)
 		end
 	end
+	md._synced_n_vars[] = n
 end
 
 function Base.setindex!(d::ModelDictionary, value, index::Symbol)

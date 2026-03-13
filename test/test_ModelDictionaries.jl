@@ -273,6 +273,35 @@ end
 	@test length(d) == 7  # a + b[1:3] + c + d_var[1:2]
 end
 
+@testset "Test add_missing after subset creation" begin
+	# A subset dictionary created via broadcast filtering may have
+	# length(dict) >= num_variables(model) even when model variables are missing.
+	# Regression test: the sync guard must not use a count heuristic.
+	model3 = Model()
+	@variable(model3, p[1:5])
+
+	full = ModelDictionary(model3)
+	full[p] .= [10.0, 20.0, 30.0, 40.0, 50.0]
+
+	# Subset with 3 entries — fewer than the 5 model variables
+	subset = full[full .> 20]
+	@test length(subset) == 3
+
+	# Now add 2 new variables → model has 7, subset has 3
+	# The old heuristic (num_vars <= length(dict)) would skip sync once
+	# subset grew past num_vars. With tracked counter, sync is always correct.
+	@variable(model3, q[1:2])
+	add_missing_model_variables!(subset)
+	@test Symbol("q[1]") ∈ keys(subset.dictionary)
+	@test Symbol("q[2]") ∈ keys(subset.dictionary)
+	@test length(subset) == 7  # 3 original + 4 previously missing (p[1:2], q[1:2])
+
+	# Verify repeated sync is a no-op (counter is up-to-date)
+	len_before = length(subset)
+	add_missing_model_variables!(subset)
+	@test length(subset) == len_before
+end
+
 @testset "Test broadcasting" begin
 	model = Model()
 	@variable(model, x)
