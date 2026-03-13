@@ -9,16 +9,16 @@ import GAMS
 """
     ModelDictionary
 
-A dictionary mapping symbols to numeric values, with special support for JuMP variables.
+A dictionary mapping variable names to numeric values, with special support for JuMP variables.
 
 `ModelDictionary` provides convenient syntax for storing and retrieving values
 associated with JuMP variables. It supports indexing by variable references,
-symbols, or dot notation, and integrates with JuMP's `fix` and `set_start_value`
+strings, symbols, or dot notation, and integrates with JuMP's `fix` and `set_start_value`
 functions.
 
 # Fields
 - `model::AbstractModel`: The JuMP model whose variables are tracked
-- `dictionary::Dictionary{Symbol, Union{Nothing, Number}}`: Storage for variable values
+- `dictionary::Dictionary{String, Union{Nothing, Number}}`: Storage for variable values
 
 # Examples
 ```julia
@@ -30,7 +30,7 @@ d = ModelDictionary(model)
 
 # Set values using different access methods
 d[x] = 1.0
-d[:y] = [1, 2, 3]     # Symbol access
+d["y"] = [1, 2, 3]    # String access
 d.y = [1, 2, 3]       # Dot notation
 
 # Get values
@@ -42,7 +42,7 @@ See also: [`fix`](@ref), [`set_start_value`](@ref), [`value_dict`](@ref)
 """
 struct ModelDictionary
 	model::AbstractModel
-	dictionary::Dictionary{Symbol, Union{Nothing, Number}}
+	dictionary::Dictionary{String, Union{Nothing, Number}}
 	_synced_n_vars::Base.RefValue{Int}
 	ModelDictionary(model, dictionary) = new(model, dictionary, Ref(0))
 end
@@ -112,7 +112,7 @@ fix(d)  # Fix all variables to their values in d
 See also: [`fix`](@ref), [`set_start_value`](@ref), [`value_dict`](@ref)
 """
 function ModelDictionary(m)
-	md = ModelDictionary(m, Dictionary{Symbol, Union{Nothing, Number}}())
+	md = ModelDictionary(m, Dictionary{String, Union{Nothing, Number}}())
 	add_missing_model_variables!(md)
 	return md
 end
@@ -151,37 +151,36 @@ function add_missing_model_variables!(md::ModelDictionary)
 	n = JuMP.num_variables(md.model)
 	n == md._synced_n_vars[] && return
 	for v in all_variables(md.model)
-		sym = Symbol(name(v))
-		if sym ∉ keys(md.dictionary)
-			insert!(md.dictionary, sym, nothing)
+		k = name(v)
+		if k ∉ keys(md.dictionary)
+			insert!(md.dictionary, k, nothing)
 		end
 	end
 	md._synced_n_vars[] = n
 end
 
-function Base.setindex!(d::ModelDictionary, value, index::Symbol)
+function Base.setindex!(d::ModelDictionary, value, index::String)
 	index ∈ keys(d.dictionary) || add_missing_model_variables!(d)
-	index ∉ keys(d.dictionary) && haskey(d.model, index) && return setindex!(d, value, d.model[index])
+	sym = Symbol(index)
+	index ∉ keys(d.dictionary) && haskey(d.model, sym) && return setindex!(d, value, d.model[sym])
 	return setindex!(d.dictionary, value, index)
 end
-Base.setindex!(d::ModelDictionary, value, index::AbstractVariableRef) = setindex!(d, value, Symbol(name(index)))
-Base.setindex!(d::ModelDictionary, value, index) = setindex!(d, value, Symbol(index))
+Base.setindex!(d::ModelDictionary, value, index::AbstractVariableRef) = setindex!(d, value, name(index))
+Base.setindex!(d::ModelDictionary, value, index::Symbol) = setindex!(d, value, String(index))
 Base.setindex!(d::ModelDictionary, value, index::AbstractArray) = setindex!.(Ref(d), value, index)
 
-function Base.getindex(d::ModelDictionary, index::Symbol)
-	# If key not found, update and try again
+function Base.getindex(d::ModelDictionary, index::String)
 	index ∈ keys(d.dictionary) || add_missing_model_variables!(d)
 	index ∈ keys(d.dictionary) && return getindex(d.dictionary, index)
-	haskey(d.model, index) && return getindex(d, d.model[index])
+	sym = Symbol(index)
+	haskey(d.model, sym) && return getindex(d, d.model[sym])
 	return d.dictionary[index] # IndexError
 end
-Base.getindex(d::ModelDictionary, index::AbstractVariableRef) = getindex(d, Symbol(name(index)))
-Base.getindex(d::ModelDictionary, index) = getindex(d, Symbol(index))
-function Base.getindex(d::ModelDictionary, container::AbstractArray{Symbol}, varname::Union{Nothing, Symbol}=nothing)
+Base.getindex(d::ModelDictionary, index::AbstractVariableRef) = getindex(d, name(index))
+Base.getindex(d::ModelDictionary, index::Symbol) = getindex(d, String(index))
+function Base.getindex(d::ModelDictionary, container::AbstractArray{<:AbstractString}, varname::Union{Nothing, AbstractString}=nothing)
 	add_missing_model_variables!(d)
-	# Indices of the variables in the dictionary
-	idx = indexin([container...], [keys(d.dictionary)...])
-	# References to the values in the dictionary
+	idx = indexin(String[container...], [keys(d.dictionary)...])
 	data_view = @view(d.dictionary.values[idx])
 	return create_window(data_view, container, varname)
 end
@@ -189,11 +188,10 @@ Base.getindex(d::ModelDictionary, s::SparseZeroArray) = getindex(d, s.data)
 Base.setindex!(d::ModelDictionary, value, s::SparseZeroArray) = setindex!(d, value, s.data)
 
 function Base.getindex(d::ModelDictionary, container::AbstractArray{<:AbstractVariableRef})
-	# Extract variable base name from the first element
-	varname = isempty(container) ? nothing : Symbol(split(name(first(container)), "[")[1])
-	getindex(d, Symbol.(name.(container)), varname)
+	varname = isempty(container) ? nothing : split(name(first(container)), "[")[1]
+	getindex(d, name.(container), varname)
 end
-Base.getindex(d::ModelDictionary, container::AbstractArray) = getindex(d, Symbol.(container), nothing)
+Base.getindex(d::ModelDictionary, container::AbstractArray) = getindex(d, string.(container), nothing)
 
 # Filtering with a boolean ModelDictionary (e.g., d[d .> 0])
 function Base.getindex(d::ModelDictionary, mask::ModelDictionary)
@@ -238,9 +236,9 @@ d[y[2]]      # 25
 struct Window{T, S}
 	data_view::T
 	indices::S
-	varname::Union{Nothing, Symbol}
+	varname::Union{Nothing, AbstractString}
 end
-function create_window(data_view, container, varname::Union{Nothing, Symbol}=nothing)
+function create_window(data_view, container, varname::Union{Nothing, AbstractString}=nothing)
 	indices = (_->0).(container)
 	for (i, idx) in enumerate(eachindex(indices))
 		indices[idx] = i
@@ -327,9 +325,10 @@ function Base.materialize!(w::Window, bc::Base.Broadcast.Broadcasted)
 	return w
 end
 
-Base.in(index::Symbol, d::ModelDictionary) = index ∈ keys(d.dictionary)
-Base.in(index, d::ModelDictionary) = Symbol(index) ∈ d
-Base.in(index::AbstractArray, d::ModelDictionary) = all(Symbol.(index) .∈ Ref(d))
+Base.in(index::String, d::ModelDictionary) = index ∈ keys(d.dictionary)
+Base.in(index::Symbol, d::ModelDictionary) = String(index) ∈ d
+Base.in(index::AbstractVariableRef, d::ModelDictionary) = name(index) ∈ d
+Base.in(index::AbstractArray, d::ModelDictionary) = all(string.(index) .∈ Ref(d))
 
 function Base.replace!(d::ModelDictionary, old_new::Pair...)
 	for (k, v) in zip(keys(d), replace(collect(d), old_new...))
@@ -421,7 +420,7 @@ function JuMP.fix(d::ModelDictionary)
 		# Subset dictionary: only fix variables present in the dictionary
 		for (k, v) in pairs(d.dictionary)
 			isnothing(v) && error("Cannot fix variable $k: no value in dictionary. Set it explicitly (e.g., to 0) before fixing.")
-			fix(variable_by_name(d.model, string(k)), v, force=true)
+			fix(variable_by_name(d.model, k), v, force=true)
 		end
 	end
 end
@@ -493,7 +492,7 @@ function JuMP.set_start_value(d::ModelDictionary)
 		# Subset dictionary: only set start values for variables present in the dictionary
 		for (k, v) in pairs(d.dictionary)
 			isnothing(v) && error("Cannot set start value for $k: no value in dictionary. Set it explicitly before calling set_start_value.")
-			set_start_value(variable_by_name(d.model, string(k)), v)
+			set_start_value(variable_by_name(d.model, k), v)
 		end
 	end
 end
@@ -581,7 +580,7 @@ function unload(path::AbstractString, d::ModelDictionary)
 	rows = NamedTuple{(:variable, :indices, :value), Tuple{String, String, Float64}}[]
 	for (k, v) in pairs(d.dictionary)
 		isnothing(v) && continue
-		base, indices = parse_variable_name(string(k))
+		base, indices = parse_variable_name(k)
 		push!(rows, (; variable=base, indices=indices, value=Float64(v)))
 	end
 	Parquet2.writefile(path, DataFrame(rows))
@@ -907,8 +906,8 @@ end
 # ----------------------------------------------------------------------------------------------------------------------
 # Dot access
 # ----------------------------------------------------------------------------------------------------------------------
-Base.setproperty!(d::ModelDictionary, name::Symbol, value) = setindex!(d, value, name)
-Base.getproperty(d::ModelDictionary, sym::Symbol) = sym in fieldnames(typeof(d)) ? getfield(d, sym) : d[sym]
+Base.setproperty!(d::ModelDictionary, name::Symbol, value) = setindex!(d, value, String(name))
+Base.getproperty(d::ModelDictionary, sym::Symbol) = sym in fieldnames(typeof(d)) ? getfield(d, sym) : d[String(sym)]
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Broadcasting
@@ -1011,7 +1010,7 @@ function assert_no_diff(a::ModelDictionary, b::ModelDictionary; atol::Real=1e-6,
 
 	# Check differences using MAKRO-style logic:
 	# Pass if: |diff| <= atol AND (|ref| <= atol OR |diff/ref| <= rtol)
-	violations = Tuple{Symbol, Float64, Float64, Any, Any}[]  # (key, abs_diff, rel_diff, v1, v2)
+	violations = Tuple{String, Float64, Float64, Any, Any}[]  # (key, abs_diff, rel_diff, v1, v2)
 	for k in keys(a)
 		v1, v2 = a[k], b[k]
 		isnothing(v1) && continue

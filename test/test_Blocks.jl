@@ -944,4 +944,90 @@ end
 	end
 end
 
+@testset "add_equation!" begin
+	m = Model(Ipopt.Optimizer)
+	JuMP.@variables m begin
+		x
+		y[1:3]
+		z
+	end
+
+	base = @block m begin
+		x, x == 1
+	end
+
+	@testset "adds equation to existing block" begin
+		add_equation!(base, z, z, 5)
+		@test length(base) == 2
+		@test is_endogenous(z, base)
+		@test z ∈ base
+		@test length(base.residuals) == 2
+		@test length(base.constraints) == 2
+	end
+
+	@testset "variables set is updated" begin
+		@test z ∈ base.variables
+	end
+
+	@testset "rejects duplicate endogenous" begin
+		err = try
+			add_equation!(base, x, x, 99)
+			nothing
+		catch e
+			e
+		end
+		@test err isa ErrorException
+		@test occursin("already endogenous", err.msg)
+	end
+
+	@testset "solves correctly" begin
+		m2 = Model(Ipopt.Optimizer)
+		JuMP.@variables m2 begin
+			a
+			b
+			c
+		end
+
+		blk = @block m2 begin
+			a, a == 10
+		end
+		add_equation!(blk, b, b, 20)
+		add_equation!(blk, c, a + b + c, 60)
+		@test length(blk) == 3
+
+		optimize!(m2)
+		@test value(a) ≈ 10 atol=1e-6
+		@test value(b) ≈ 20 atol=1e-6
+		@test value(c) ≈ 30 atol=1e-6
+	end
+
+	@testset "residual and constraint alignment" begin
+		m3 = Model()
+		@variable(m3, p)
+		@variable(m3, q)
+
+		blk = Block(m3)
+		add_equation!(blk, p, p, 1)
+		add_equation!(blk, q, q, 2)
+
+		@test length(blk.endogenous) == length(blk.residuals) == length(blk.constraints) == 2
+		@test name(blk.residuals[1]) == "p_J"
+		@test name(blk.residuals[2]) == "q_J"
+		@test name(blk.constraints[1]) == "E_p"
+		@test name(blk.constraints[2]) == "E_q"
+	end
+
+	@testset "returns block for chaining" begin
+		m4 = Model()
+		@variable(m4, r)
+		@variable(m4, s)
+
+		blk = Block(m4)
+		result = add_equation!(blk, r, r, 1)
+		@test result === blk
+		add_equation!(result, s, s, 2)
+		@test length(blk) == 2
+	end
+end
+
 end # Module

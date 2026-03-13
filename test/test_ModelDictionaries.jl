@@ -35,11 +35,11 @@ end
 
 	b[x] = 1
 	@test b[x] == 1
-	@test b[x] == b[:x]
+	@test b[x] == b["x"]
 
 	b[y[1]] = 2.0
 	@test b[y[1]] == 2.0
-	@test b[y[1]] == b[y][1] == b[:y][1]
+	@test b[y[1]] == b[y][1] == b["y"][1]
 	b[y][2] = 2.0
 	@test b[y[2]] == 2.0
 
@@ -55,12 +55,12 @@ end
 	b[y] = 2.0
 	@test b[y[1]] == 2.0
 	@test all(b[y] .== 2.0)
-	@test all(b[y] .== b[:y])
+	@test all(b[y] .== b["y"])
 
 	b[z] = 1 // 3
 	@test b[z[1,:a]] == 1 // 3
 	@test all(b[z] .== 1 // 3)
-	@test all(b[z] .== b[:z])
+	@test all(b[z] .== b["z"])
 
 	@test length(b) == length(all_variables(model))
 end
@@ -71,14 +71,14 @@ end
 	@test !isnothing(b[y[1]])
 	@test isnothing(b[y[2]])
 	@test all(b[y] .=== [1, [nothing for _ in 2:5]...])
-	@test all(b[y] .== b[:y])
+	@test all(b[y] .== b["y"])
 
 	b[z[1, :a]] = 1
 	@test !isnothing(b[z[1, :a]])
 	@test isnothing(b[z[1, :b]])
 	@test isnothing(b[z[2, :a]])
 	@test sum(isnothing.(b[z])) == length(z) - 1
-	@test all(b[z] .== b[:z])
+	@test all(b[z] .== b["z"])
 
 	@test length(b) == length(all_variables(model))
 end
@@ -183,9 +183,8 @@ end
 
 @testset "Test ∈" begin
 	b = ModelDictionary(model)
-	@test :x ∈ b
-
 	@test "x" ∈ b
+	@test :x ∈ b
 	@test x ∈ b
 
 	@test y[1] ∈ b
@@ -258,16 +257,16 @@ end
 	@variable(model2, d_var[1:2])
 
 	# New variables are not yet in dictionary
-	@test :c ∉ keys(d.dictionary)
-	@test Symbol("d_var[1]") ∉ keys(d.dictionary)
+	@test "c" ∉ keys(d.dictionary)
+	@test "d_var[1]" ∉ keys(d.dictionary)
 
 	# Explicitly sync the dictionary
 	add_missing_model_variables!(d)
 
 	# Now they should be present (with nothing values)
-	@test :c ∈ keys(d.dictionary)
-	@test Symbol("d_var[1]") ∈ keys(d.dictionary)
-	@test Symbol("d_var[2]") ∈ keys(d.dictionary)
+	@test "c" ∈ keys(d.dictionary)
+	@test "d_var[1]" ∈ keys(d.dictionary)
+	@test "d_var[2]" ∈ keys(d.dictionary)
 	@test isnothing(d[c])
 	@test isnothing(d[d_var[1]])
 	@test length(d) == 7  # a + b[1:3] + c + d_var[1:2]
@@ -292,8 +291,8 @@ end
 	# subset grew past num_vars. With tracked counter, sync is always correct.
 	@variable(model3, q[1:2])
 	add_missing_model_variables!(subset)
-	@test Symbol("q[1]") ∈ keys(subset.dictionary)
-	@test Symbol("q[2]") ∈ keys(subset.dictionary)
+	@test "q[1]" ∈ keys(subset.dictionary)
+	@test "q[2]" ∈ keys(subset.dictionary)
 	@test length(subset) == 7  # 3 original + 4 previously missing (p[1:2], q[1:2])
 
 	# Verify repeated sync is a no-op (counter is up-to-date)

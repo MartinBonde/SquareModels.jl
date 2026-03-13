@@ -7,7 +7,7 @@ A JuMP extension for writing modular models with square systems of equations
 """
 module SquareModels
 
-export @block, Block, @endo_exo!, @variables, add_equation
+export @block, Block, @endo_exo!, @variables, add_equation, add_equation!
 export endogenous, residuals, variables, exogenous, is_endogenous, overlaps, shared_endogenous
 export ConstraintRef, VariableRef  # Re-exported from JuMP for macro hygiene
 export ModelDictionary, fix, unfix, set_start_value, value, value_dict, add_missing_model_variables!
@@ -33,8 +33,9 @@ using JuMP: JuMP, AbstractModel, AbstractVariableRef, VariableRef, ConstraintRef
 using JuMP: AffExpr, QuadExpr, NonlinearExpr
 using JuMP.Containers: DenseAxisArray, SparseAxisArray
 using JuMP: @variable, @constraint, constraint_object
-using JuMP: set_name, name, variable_by_name, fix, is_fixed, unfix, unregister, all_variables, value, set_start_value
+using JuMP: set_name, name, fix, is_fixed, unfix, unregister, all_variables, value, set_start_value
 using JuMP: list_of_constraint_types, all_constraints, is_valid, object_dictionary
+const _name_lookup_cache = WeakKeyDict{AbstractModel, Dict{String, VariableRef}}()
 
 include("utils.jl")
 include("SparseZeroArrays.jl")
@@ -505,6 +506,21 @@ end
 make_constraint_name(var) = SquareModels.CONSTRAINT_PREFIX * string(var)
 make_residual_name(var) = string(var) * SquareModels.RESIDUAL_SUFFIX
 
+"""Cached version of JuMP.variable_by_name — O(1) after first call per model."""
+function variable_by_name(model::AbstractModel, var_name::AbstractString)
+	lookup = get!(_name_lookup_cache, model) do
+		Dict{String, VariableRef}(name(v) => v for v in all_variables(model))
+	end
+	key = String(var_name)
+	v = get(lookup, key, nothing)
+	v !== nothing && return v
+	for v in all_variables(model)
+		n = name(v)
+		haskey(lookup, n) || (lookup[n] = v)
+	end
+	return get(lookup, key, nothing)
+end
+
 """
     add_equation(model, endo::VariableRef, lhs, rhs=0)
 
@@ -546,6 +562,17 @@ function add_equation(model, endo::VariableRef, lhs, rhs=0)
 	collect_variables!(all_vars, rhs)
 
 	Block(m, [endo], [resid], all_vars, ConstraintRef[con])
+end
+
+function add_equation!(block::Block, endo::VariableRef, lhs, rhs=0)
+	endo ∉ block._endogenous_set || error("Cannot add equation: $(name(endo)) is already endogenous in this block.")
+	eq_block = add_equation(block.model, endo, lhs, rhs)
+	append!(block.endogenous, eq_block.endogenous)
+	append!(block.residuals, eq_block.residuals)
+	append!(block.constraints, eq_block.constraints)
+	union!(block.variables, eq_block.variables)
+	push!(block._endogenous_set, endo)
+	return block
 end
 
 """Helper function to extract base name from variable reference"""
