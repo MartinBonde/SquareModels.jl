@@ -164,9 +164,7 @@ end
 @testset "Perf: @block definition (IO-scale)" begin
     io = build_io_model()
 
-    t_block = bench_fresh(() -> build_io_model()) do io2
-        define_block(io2)
-    end
+    t_block = bench_fresh(() -> build_io_model(), define_block)
 
     println()
     println("  @block definition (IO-scale, $(length(io.id_pairs)) sparse cells × $(length(io.T)) periods)")

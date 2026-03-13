@@ -1,7 +1,7 @@
 # solve.jl - Functions for solving blocks
 
 using JuMP: Model, VariableRef, ConstraintRef, AffExpr, QuadExpr, NonlinearExpr
-using JuMP: @variable, @constraint, constraint_object, set_name, name
+using JuMP: @variable, @constraint, constraint_object, name
 using JuMP: set_start_value, fix, has_lower_bound, has_upper_bound
 using JuMP: lower_bound, upper_bound, set_lower_bound, set_upper_bound
 using JuMP: all_variables, is_fixed, value, add_to_expression!
@@ -145,7 +145,6 @@ function _build_model(
     var_map = sizehint!(Dict{VariableRef, VariableRef}(), length(block.endogenous))
     for endo_var in block.endogenous
         new_var = @variable(solve_model)
-        set_name(new_var, name(endo_var))
         var_map[endo_var] = new_var
 
         # Transfer bounds from original model
