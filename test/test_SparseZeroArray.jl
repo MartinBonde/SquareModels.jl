@@ -1,7 +1,7 @@
 using Test
 using SquareModels
 import JuMP
-using JuMP: Model, @variable, all_variables, fix, unfix, is_fixed, value, optimize!, set_start_value, AffExpr, name
+using JuMP: Model, @variable, all_variables, fix, unfix, is_fixed, value, set_start_value, set_silent, AffExpr, name
 using JuMP.Containers: SparseAxisArray
 using Ipopt
 
@@ -309,6 +309,7 @@ end
 
 @testset "@block with SparseZeroArray and ∑" begin
     m = Model(Ipopt.Optimizer)
+    set_silent(m)
 
     @variables m begin
         x[i=1:3, j=1:3; i <= j], "Sparse"
@@ -317,26 +318,27 @@ end
 
     @test x isa SparseZeroArray
 
-    # Use ∑ to sum over sparse variable without filter clause
     b = @block m begin
         y[i ∈ 1:3], y[i] == ∑(x[i, j] for j in 1:3)
     end
 
     @test length(b) == 3
 
-    # Fix x values and solve
+    db = ModelDictionary(m)
     for i in 1:3, j in 1:3
         if i <= j
-            fix(x.data[i, j], Float64(i + j), force=true)
+            db[x.data[i, j]] = Float64(i + j)
         end
     end
-    fix.(residuals(b), 0.0, force=true)
-    optimize!(m)
+    db[y] .= 1.0
+    db[residuals(b)] .= 0.0
+
+    result = solve(b, db)
 
     # y[1] = x[1,1] + x[1,2] + x[1,3] = 2 + 3 + 4 = 9
-    @test value(y[1]) ≈ 9.0 atol=1e-6
+    @test result[y[1]] ≈ 9.0 atol=1e-6
     # y[2] = Zero() + x[2,2] + x[2,3] = 0 + 4 + 5 = 9
-    @test value(y[2]) ≈ 9.0 atol=1e-6
+    @test result[y[2]] ≈ 9.0 atol=1e-6
     # y[3] = Zero() + Zero() + x[3,3] = 0 + 0 + 6 = 6
-    @test value(y[3]) ≈ 6.0 atol=1e-6
+    @test result[y[3]] ≈ 6.0 atol=1e-6
 end

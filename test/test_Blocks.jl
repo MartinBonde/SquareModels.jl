@@ -41,43 +41,44 @@ end
 	end
 
 	@testset "x" begin
-		v1, r1, cons1 = SquareModels.@_block(m, x, x == 1)
-		b1 = SquareModels.Block(m, v1, r1, Set{VariableRef}(), cons1)
+		v1, r1, eqs1 = SquareModels.@_block(m, x, x == 1)
+		b1 = SquareModels.Block(m, v1, r1, Set{VariableRef}(), eqs1)
 		@test typeof(v1) <: AbstractVector{VariableRef}
-		@test typeof(cons1) <: AbstractVector{ConstraintRef}
-		@test length(v1) == length(cons1) == length(b1) == 1
+		@test typeof(eqs1) <: AbstractVector{Equation}
+		@test length(v1) == length(eqs1) == length(b1) == 1
 		@test is_endogenous(x, b1)
 	end
 
 	@testset "y[1:4]" begin
-		v2, r2, cons2 = SquareModels.@_block(m, y[i ∈ 1:4], y[i] == 1)
-		b2 = SquareModels.Block(m, v2, r2, Set{VariableRef}(), cons2)
+		v2, r2, eqs2 = SquareModels.@_block(m, y[i ∈ 1:4], y[i] == 1)
+		b2 = SquareModels.Block(m, v2, r2, Set{VariableRef}(), eqs2)
 		@test typeof(v2) <: AbstractVector{VariableRef}
-		@test length(v2) == length(cons2) == length(b2) == 4
+		@test length(v2) == length(eqs2) == length(b2) == 4
 		@test all(is_endogenous(y[i], b2) for i ∈ 1:4)
 	end
 
 	@testset "y[5]" begin
-		v3, r3, cons3 = SquareModels.@_block(m, y[i ∈ [5]], y[i] == 1)
-		b3 = SquareModels.Block(m, v3, r3, Set{VariableRef}(), cons3)
+		v3, r3, eqs3 = SquareModels.@_block(m, y[i ∈ [5]], y[i] == 1)
+		b3 = SquareModels.Block(m, v3, r3, Set{VariableRef}(), eqs3)
 		@test typeof(v3) <: AbstractVector{VariableRef}
-		@test length(v3) == length(cons3) == length(b3) == 1
+		@test length(v3) == length(eqs3) == length(b3) == 1
 		@test is_endogenous(y[5], b3)
 	end
 
 	@testset "z" begin
 		t₁ = 1
 		T = 3
-		v4, r4, cons4 = SquareModels.@_block(m, z[i ∈ t₁:T, j ∈ [:a, :b]], z[i, j] == 1)
-		b4 = SquareModels.Block(m, v4, r4, Set{VariableRef}(), cons4)
+		v4, r4, eqs4 = SquareModels.@_block(m, z[i ∈ t₁:T, j ∈ [:a, :b]], z[i, j] == 1)
+		b4 = SquareModels.Block(m, v4, r4, Set{VariableRef}(), eqs4)
 		@test typeof(v4) <: AbstractVector{VariableRef}
-		@test length(v4) == length(cons4) == length(b4) == 6
+		@test length(v4) == length(eqs4) == length(b4) == 6
 		@test all(is_endogenous(z[i, j], b4) for i ∈ t₁:T, j ∈ [:a, :b])
 	end
 end
 
 @testset "@block" begin
 	m = Model(Ipopt.Optimizer)
+	set_silent(m)
 	JuMP.@variables m begin
 		x
 		y[1:5]
@@ -97,14 +98,16 @@ end
 	@test all(z[i, j] ∈ b for i ∈ 1:3, j ∈ [:a, :b])
 	@test q ∉ b
 
-	optimize!(m)
+	db = ModelDictionary(m, 0.0)
+	result = solve(b, db)
 	for i in [x, y..., z...]
-		@test value(i) == 1
+		@test result[i] ≈ 1 atol=1e-6
 	end
 end
 
 @testset "solve block" begin
 	m = Model(Ipopt.Optimizer)
+	set_silent(m)
 	JuMP.@variables m begin
 		x
 		y[1:5]
@@ -118,9 +121,9 @@ end
 		z[i ∈ 1:3, j ∈ [:a, :b]], z[i, j] == 1
 	end
 
-	optimize!(m)
-	output = Dict(var => value(var) for var in all_variables(m))
-	@test all(output[i] == 1 for i in b)
+	db = ModelDictionary(m, 0.0)
+	result = solve(b, db)
+	@test all(isapprox(result[i], 1; atol=1e-6) for i in b)
 end
 
 @testset "_endo_exo!" begin
@@ -465,12 +468,12 @@ end
 		τ[D,S] # Trade cost from country s to country d
   end
 
-  variable, residual, cons = SquareModels.@_block(m, C[d ∈ D], w[d] * y[d] == pᶜ[d] * C[d])
+  variable, residual, eqs = SquareModels.@_block(m, C[d ∈ D], w[d] * y[d] == pᶜ[d] * C[d])
   @test isa(variable, AbstractVector{VariableRef})
-  @test isa(cons, AbstractVector{ConstraintRef})
-  variable, residual, cons = SquareModels.@_block(m, c[d ∈ D, s ∈ S], c[d,s] == μ[d,s] * C[d] * (w[s] / pᶜ[d])^(-σ))
+  @test isa(eqs, AbstractVector{Equation})
+  variable, residual, eqs = SquareModels.@_block(m, c[d ∈ D, s ∈ S], c[d,s] == μ[d,s] * C[d] * (w[s] / pᶜ[d])^(-σ))
   @test isa(variable, AbstractVector{VariableRef})
-  @test isa(cons, AbstractVector{ConstraintRef})
+  @test isa(eqs, AbstractVector{Equation})
 
   ert_tuples = [
 		SquareModels.@_block(m, C[d ∈ D], w[d] * y[d] == pᶜ[d] * C[d]),
@@ -482,11 +485,11 @@ end
   ]
   variables = VariableRef[Iterators.flatten([t[1] for t in ert_tuples])...]
   residuals = VariableRef[Iterators.flatten([t[2] for t in ert_tuples])...]
-  constraints = ConstraintRef[Iterators.flatten([t[3] for t in ert_tuples])...]
+  equations = Equation[Iterators.flatten([t[3] for t in ert_tuples])...]
   @test all(isa.(variables, VariableRef))
-  @test all(isa.(constraints, ConstraintRef))
+  @test all(isa.(equations, Equation))
 
-  Block(m, variables, residuals, Set{VariableRef}(), constraints)
+  Block(m, variables, residuals, Set{VariableRef}(), equations)
 
   base_model = @block m begin
 		C[d ∈ D],
@@ -561,8 +564,6 @@ end
 			αβγδ_long_name_with_unicode_σ, αβγδ_long_name_with_unicode_σ == 1
 		end
 		@test length(b) == 1
-		# Verify constraint was created with unicode name
-		@test haskey(m, :E_αβγδ_long_name_with_unicode_σ)
 	end
 
 	@testset "Block + empty = Block" begin
@@ -655,13 +656,9 @@ end
 	end
 
 	@testset "Residual substitution in different equation positions" begin
-		# Test residual substitution by fixing endo to wrong value and solving for residual
-		# This verifies the substitution (endo + residual) is happening correctly
-
 		@testset "Endo on LHS (simple)" begin
-			# GDP == C + I + G  =>  (GDP + GDP_J) == C + I + G
-			# Fix GDP=100, C+I+G=180, so GDP_J should be 80
 			m = Model(Ipopt.Optimizer)
+			set_silent(m)
 			JuMP.@variables m begin
 				GDP
 				C
@@ -672,69 +669,62 @@ end
 				GDP, GDP == C + I + G
 			end
 			@test haskey(m, :GDP_J)
-			fix(GDP, 100, force=true)
-			fix(C, 100, force=true)
-			fix(I, 50, force=true)
-			fix(G, 30, force=true)
-			unfix(m[:GDP_J])
-			optimize!(m)
-			# (100 + GDP_J) == 180 => GDP_J == 80
-			@test value(m[:GDP_J]) ≈ 80 atol=1e-6
+			db = ModelDictionary(m)
+			db[GDP] = 100.0; db[C] = 100.0; db[I] = 50.0; db[G] = 30.0
+			db[m[:GDP_J]] = 0.0
+			@endo_exo!(b1, m[:GDP_J], GDP)
+			result = solve(b1, db)
+			@test result[m[:GDP_J]] ≈ 80 atol=1e-6
 		end
 
 		@testset "Endo with coefficient (not first term)" begin
-			# 2 * a == 10  =>  2 * (a + a_J) == 10
-			# Fix a=4: 2*(4 + a_J) == 10 => a_J = 1
 			m = Model(Ipopt.Optimizer)
+			set_silent(m)
 			@variable(m, a)
 			b2 = @block m begin
 				a, 2 * a == 10
 			end
 			@test haskey(m, :a_J)
-			fix(a, 4, force=true)
-			unfix(m[:a_J])
-			optimize!(m)
-			@test value(m[:a_J]) ≈ 1 atol=1e-6
+			db = ModelDictionary(m)
+			db[a] = 4.0; db[m[:a_J]] = 0.0
+			@endo_exo!(b2, m[:a_J], a)
+			result = solve(b2, db)
+			@test result[m[:a_J]] ≈ 1 atol=1e-6
 		end
 
 		@testset "Endo appears multiple times" begin
-			# b[i] + b[i] == 4  =>  (b[i] + b_J[i]) + (b[i] + b_J[i]) == 4
-			# = 2*(b[i] + b_J[i]) == 4
-			# Fix b[i]=0: 2*(0 + b_J[i]) == 4 => b_J[i] = 2
 			m = Model(Ipopt.Optimizer)
+			set_silent(m)
 			@variable(m, b[1:2])
 			b3 = @block m begin
 				b[i ∈ 1:2], b[i] + b[i] == 4
 			end
 			@test haskey(m, :b_J)
-			fix.(b, 0, force=true)
-			unfix.(m[:b_J])
-			optimize!(m)
-			@test all(value.(m[:b_J]) .≈ 2)
+			db = ModelDictionary(m)
+			db[b] .= 0.0; db[m[:b_J]] .= 0.0
+			@endo_exo!(b3, m[:b_J], b)
+			result = solve(b3, db)
+			@test all(result[m[:b_J][i]] ≈ 2 for i in 1:2)
 		end
 
 		@testset "Endo in complex expression (power)" begin
-			# c[i]^2 + c[i] == 6  =>  (c[i] + c_J[i])^2 + (c[i] + c_J[i]) == 6
-			# Fix c=0: (0 + c_J)^2 + (0 + c_J) == 6 => c_J^2 + c_J - 6 = 0
-			# => (c_J+3)(c_J-2) = 0 => c_J = 2 (positive root)
 			m = Model(Ipopt.Optimizer)
+			set_silent(m)
 			@variable(m, c[1:2])
 			b4 = @block m begin
 				c[i ∈ 1:2], c[i]^2 + c[i] == 6
 			end
 			@test haskey(m, :c_J)
-			fix.(c, 0, force=true)
-			unfix.(m[:c_J])
-			set_start_value.(m[:c_J], 2)  # Start near positive root
-			optimize!(m)
-			@test all(value.(m[:c_J]) .≈ 2)
+			db = ModelDictionary(m)
+			db[c] .= 0.0; db[m[:c_J]] .= 2.0
+			@endo_exo!(b4, m[:c_J], c)
+			result = solve(b4, db)
+			@test all(result[m[:c_J][i]] ≈ 2 for i in 1:2)
 		end
 
 		@testset "Endo on RHS" begin
-			# Equation: C + I == GDP, endo is GDP
-			# Transformed: C + I == (GDP + GDP_J)
-			# Fix GDP=100, C+I=150: 150 == (100 + GDP_J) => GDP_J = 50
 			m = Model(Ipopt.Optimizer)
+			set_silent(m)
 			JuMP.@variables m begin
 				GDP
 				C
@@ -744,44 +734,45 @@ end
 				GDP, C + I == GDP
 			end
 			@test haskey(m, :GDP_J)
-			fix(GDP, 100, force=true)
-			fix(C, 100, force=true)
-			fix(I, 50, force=true)
-			unfix(m[:GDP_J])
-			optimize!(m)
-			@test value(m[:GDP_J]) ≈ 50 atol=1e-6
+			db = ModelDictionary(m)
+			db[GDP] = 100.0; db[C] = 100.0; db[I] = 50.0; db[m[:GDP_J]] = 0.0
+			@endo_exo!(b5, m[:GDP_J], GDP)
+			result = solve(b5, db)
+			@test result[m[:GDP_J]] ≈ 50 atol=1e-6
 		end
 
 		@testset "Lagged self-reference" begin
-			# x[t] == x[t-1] + 1 with endo x[t] should only substitute x[t], not x[t-1].
 			m = Model(Ipopt.Optimizer)
+			set_silent(m)
 			@variable(m, x[1:3])
 			b6 = @block m begin
 				x[t ∈ 2:3], x[t] == x[t-1] + 1
 			end
 			@test haskey(m, :x_J)
-			fix.(x, [10.0, 20.0, 30.0], force=true)
-			unfix.(m[:x_J][2:3])
-			optimize!(m)
-			@test value(m[:x_J][2]) ≈ -9 atol=1e-6
-			@test value(m[:x_J][3]) ≈ -9 atol=1e-6
+			db = ModelDictionary(m)
+			db[x] .= [10.0, 20.0, 30.0]; db[m[:x_J]] .= 0.0
+			@endo_exo!(b6, m[:x_J][2:3], x[2:3])
+			result = solve(b6, db)
+			@test result[m[:x_J][2]] ≈ -9 atol=1e-6
+			@test result[m[:x_J][3]] ≈ -9 atol=1e-6
 		end
 
 		@testset "Lagged self-reference with additional leading index" begin
-			# x[s,t] == x[s,t-1] + 1 with endo x[s,t] should not substitute x[s,t-1].
 			m = Model(Ipopt.Optimizer)
+			set_silent(m)
 			@variable(m, x[1:2, 1:3])
 			b7 = @block m begin
 				x[s ∈ 1:2, t ∈ 2:3], x[s, t] == x[s, t-1] + 1
 			end
 			@test haskey(m, :x_J)
-			fix.(x, [10.0 20.0 30.0; 40.0 50.0 60.0], force=true)
-			unfix.(m[:x_J][:, 2:3])
-			optimize!(m)
-			@test value(m[:x_J][1, 2]) ≈ -9 atol=1e-6
-			@test value(m[:x_J][1, 3]) ≈ -9 atol=1e-6
-			@test value(m[:x_J][2, 2]) ≈ -9 atol=1e-6
-			@test value(m[:x_J][2, 3]) ≈ -9 atol=1e-6
+			db = ModelDictionary(m)
+			db[x] .= [10.0 20.0 30.0; 40.0 50.0 60.0]; db[m[:x_J]] .= 0.0
+			@endo_exo!(b7, vec(m[:x_J][:, 2:3]), vec(x[:, 2:3]))
+			result = solve(b7, db)
+			@test result[m[:x_J][1, 2]] ≈ -9 atol=1e-6
+			@test result[m[:x_J][1, 3]] ≈ -9 atol=1e-6
+			@test result[m[:x_J][2, 2]] ≈ -9 atol=1e-6
+			@test result[m[:x_J][2, 3]] ≈ -9 atol=1e-6
 		end
 	end
 
@@ -809,7 +800,7 @@ end
 
 end
 
-@testset "constraint refs are stored" begin
+@testset "equations are stored" begin
 	m = Model()
 	@variable(m, x)
 	@variable(m, y[1:3])
@@ -819,11 +810,9 @@ end
 		y[i ∈ 1:3], y[i] == i
 	end
 
-	# Verify constraints are stored - one per endogenous variable (4 total: 1 for x + 3 for y)
-	@test length(b.constraints) == 4
-	@test all(isa.(b.constraints, ConstraintRef))
-	# Names can be retrieved directly from constraints
-	@test name(b.constraints[1]) == "E_x"
+	# Verify equations are stored - one per endogenous variable (4 total: 1 for x + 3 for y)
+	@test length(b.equations) == 4
+	@test all(isa.(b.equations, Equation))
 end
 
 @testset "@block performance" begin
@@ -882,6 +871,7 @@ end
 
 	@testset "residual substitution" begin
 		m = Model(Ipopt.Optimizer)
+		set_silent(m)
 		@variable(m, s[i=[:a, :c], d=[:b, :d], t=1:2; (i, d) in pairs_set])
 
 		b = @block m begin
@@ -890,13 +880,14 @@ end
 		@test haskey(m, :s_J)
 		@test m[:s_J] isa SparseAxisArray
 
+		db = ModelDictionary(m)
 		for (i, d) in pairs, t in 1:2
-			fix(s[i, d, t], 3, force=true)
+			db[s[i, d, t]] = 3.0
 		end
-		unfix.(m[:s_J])
-		optimize!(m)
-		# (3 + s_J) == 5 => s_J == 2
-		@test all(value(m[:s_J][i, d, t]) ≈ 2 for (i, d) in pairs for t in 1:2)
+		db[m[:s_J]] .= 0.0
+		@endo_exo!(b, m[:s_J], s)
+		result = solve(b, db)
+		@test all(result[m[:s_J][i, d, t]] ≈ 2 for (i, d) in pairs for t in 1:2)
 	end
 end
 
@@ -908,7 +899,7 @@ end
 		@variable(m, y[pairs, 1:2])
 		@test y isa DenseAxisArray
 
-		v, r, cons = SquareModels.@_block(m, y[(i_e, d_e) = pairs, t ∈ 1:2], y[(i_e, d_e), t] == 1)
+		v, r, eqs = SquareModels.@_block(m, y[(i_e, d_e) = pairs, t ∈ 1:2], y[(i_e, d_e), t] == 1)
 		@test length(v) == 4
 		@test all(isa.(v, VariableRef))
 	end
@@ -926,6 +917,7 @@ end
 
 	@testset "residual substitution" begin
 		m = Model(Ipopt.Optimizer)
+		set_silent(m)
 		@variable(m, y[pairs, 1:2])
 
 		b = @block m begin
@@ -934,13 +926,14 @@ end
 		@test haskey(m, :y_J)
 		@test m[:y_J] isa DenseAxisArray
 
+		db = ModelDictionary(m)
 		for (i, d) in pairs, t in 1:2
-			fix(y[(i, d), t], 3, force=true)
+			db[y[(i, d), t]] = 3.0
 		end
-		unfix.(m[:y_J])
-		optimize!(m)
-		# (3 + y_J) == 5 => y_J == 2
-		@test all(value(m[:y_J][(i, d), t]) ≈ 2 for (i, d) in pairs for t in 1:2)
+		db[m[:y_J]] .= 0.0
+		@endo_exo!(b, m[:y_J], y)
+		result = solve(b, db)
+		@test all(result[m[:y_J][(i, d), t]] ≈ 2 for (i, d) in pairs for t in 1:2)
 	end
 end
 
@@ -962,7 +955,7 @@ end
 		@test is_endogenous(z, base)
 		@test z ∈ base
 		@test length(base.residuals) == 2
-		@test length(base.constraints) == 2
+		@test length(base.equations) == 2
 	end
 
 	@testset "variables set is updated" begin
@@ -982,6 +975,7 @@ end
 
 	@testset "solves correctly" begin
 		m2 = Model(Ipopt.Optimizer)
+		set_silent(m2)
 		JuMP.@variables m2 begin
 			a
 			b
@@ -995,13 +989,14 @@ end
 		add_equation!(blk, c, a + b + c, 60)
 		@test length(blk) == 3
 
-		optimize!(m2)
-		@test value(a) ≈ 10 atol=1e-6
-		@test value(b) ≈ 20 atol=1e-6
-		@test value(c) ≈ 30 atol=1e-6
+		db = ModelDictionary(m2, 0.0)
+		result = solve(blk, db)
+		@test result[a] ≈ 10 atol=1e-6
+		@test result[b] ≈ 20 atol=1e-6
+		@test result[c] ≈ 30 atol=1e-6
 	end
 
-	@testset "residual and constraint alignment" begin
+	@testset "residual and equation alignment" begin
 		m3 = Model()
 		@variable(m3, p)
 		@variable(m3, q)
@@ -1010,11 +1005,9 @@ end
 		add_equation!(blk, p, p, 1)
 		add_equation!(blk, q, q, 2)
 
-		@test length(blk.endogenous) == length(blk.residuals) == length(blk.constraints) == 2
+		@test length(blk.endogenous) == length(blk.residuals) == length(blk.equations) == 2
 		@test name(blk.residuals[1]) == "p_J"
 		@test name(blk.residuals[2]) == "q_J"
-		@test name(blk.constraints[1]) == "E_p"
-		@test name(blk.constraints[2]) == "E_q"
 	end
 
 	@testset "returns block for chaining" begin

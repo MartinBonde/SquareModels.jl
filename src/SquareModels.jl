@@ -7,9 +7,9 @@ A JuMP extension for writing modular models with square systems of equations
 """
 module SquareModels
 
-export @block, Block, @endo_exo!, @variables, add_equation, add_equation!
+export @block, Block, Equation, @endo_exo!, @variables, add_equation, add_equation!
 export endogenous, residuals, variables, exogenous, is_endogenous, overlaps, shared_endogenous
-export ConstraintRef, VariableRef  # Re-exported from JuMP for macro hygiene
+export VariableRef  # Re-exported from JuMP for macro hygiene
 export ModelDictionary, fix, unfix, set_start_value, value, value_dict, add_missing_model_variables!
 export keys_match, assert_no_diff
 export unload, load
@@ -18,9 +18,6 @@ export solve, solve!
 export Tag, description, tags, has_tag, tagged, metadata
 export SparseZeroArray, ∑, use_sparse_zero_array!
 
-# Constraints are named after the associated endogenous variable
-# A prefix is added as a constraint and variable cannot share the same name
-CONSTRAINT_PREFIX = "E_"
 RESIDUAL_SUFFIX = "_J"  # Suffix for residual variables (J for "junk" or adjustment)
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -29,16 +26,29 @@ RESIDUAL_SUFFIX = "_J"  # Suffix for residual variables (J for "junk" or adjustm
 using Base.Meta: isexpr
 using StatsBase: countmap
 using Lazy
-using JuMP: JuMP, AbstractModel, AbstractVariableRef, VariableRef, ConstraintRef, Containers
+using JuMP: JuMP, AbstractModel, AbstractVariableRef, VariableRef, Containers
 using JuMP: AffExpr, QuadExpr, NonlinearExpr
 using JuMP.Containers: DenseAxisArray, SparseAxisArray
-using JuMP: @variable, @constraint, constraint_object
-using JuMP: set_name, name, fix, is_fixed, unfix, unregister, all_variables, value, set_start_value
-using JuMP: list_of_constraint_types, all_constraints, is_valid, object_dictionary
+using JuMP: @variable
+using JuMP: set_name, name, fix, is_fixed, unfix, all_variables, value, set_start_value
+import MathOptInterface as MOI
 const _name_lookup_cache = WeakKeyDict{AbstractModel, Dict{String, VariableRef}}()
 
 include("utils.jl")
 include("SparseZeroArrays.jl")
+
+"""
+    Equation
+
+Lightweight storage for a model equation: the expression and its constraint set.
+Unlike `ConstraintRef`, this does NOT register with JuMP/MOI, avoiding backend bridging overhead.
+"""
+struct Equation
+	func::Any
+	set::MOI.AbstractScalarSet
+end
+
+collect_variables!(vars::Set{VariableRef}, eq::Equation) = collect_variables!(vars, eq.func)
 
 """
     collect_variables!(vars::Set{VariableRef}, expr) → Set{VariableRef}
@@ -69,23 +79,23 @@ collect_variables!(vars::Set{VariableRef}, ::Union{Number, Zero}) = vars
 """
     Block
 
-A mapping between constraints and their associated endogenous variables in a JuMP model.
+A mapping between equations and their associated endogenous variables in a JuMP model.
 
-Blocks represent "square" systems where each constraint is paired with exactly one
+Blocks represent "square" systems where each equation is paired with exactly one
 variable, enabling modular model construction and endo-exo swaps (changing which
 variable is determined by which equation).
 
-Blocks store ConstraintRefs from the model. When using `solve`, these constraints are
-transformed (substituting exogenous values from the data) and added to an intermediate
-solve model.
+Blocks store `Equation` objects (lightweight func + set pairs). When using `solve`,
+these equations are transformed (substituting exogenous values from the data) and
+added to an intermediate solve model.
 
 # Fields
-- `model::AbstractModel`: The JuMP model containing the constraints and variables
+- `model::AbstractModel`: The JuMP model containing the variables
 - `endogenous::Vector{VariableRef}`: Vector of endogenous variable references
 - `residuals::Vector{VariableRef}`: Vector of residual variable references
-- `variables::Set{VariableRef}`: All variables appearing in the block's constraints
+- `variables::Set{VariableRef}`: All variables appearing in the block's equations
 - `_endogenous_set::Set{VariableRef}`: Set for O(1) membership checking of endogenous variables
-- `constraints::Vector{ConstraintRef}`: Constraint references from the model
+- `equations::Vector{Equation}`: Equation expressions (func + set pairs)
 
 # Examples
 ```julia
@@ -110,37 +120,35 @@ struct Block
 	residuals::Vector{VariableRef}
 	variables::Set{VariableRef}
 	_endogenous_set::Set{VariableRef}
-	constraints::Vector{ConstraintRef}
+	equations::Vector{Equation}
 
 	function Block(
 		model::AbstractModel,
 		endogenous::Vector{VariableRef},
 		residuals::Vector{VariableRef},
 		variables::Set{VariableRef},
-		constraints::Vector{ConstraintRef}
+		equations::Vector{Equation}
 	)
-		# Validate square: constraints must match endogenous 1:1
-		length(constraints) == length(endogenous) ||
-			error("Block must be square: got $(length(constraints)) constraints and $(length(endogenous)) endogenous variables")
+		length(equations) == length(endogenous) ||
+			error("Block must be square: got $(length(equations)) equations and $(length(endogenous)) endogenous variables")
 
-		# Validate unique endogenous variables
 		endogenous_set = Set{VariableRef}(endogenous)
 		if length(endogenous_set) != length(endogenous)
-			display(non_unqiue_pairs(endogenous, constraints))
-			error("Non-unique mapping between endogenous variables and constraints in block definition.\n" *
+			display(non_unqiue_pairs(endogenous, equations))
+			error("Non-unique mapping between endogenous variables and equations in block definition.\n" *
 			      "See non-unique mappings above.")
 		end
 
-		new(model, endogenous, residuals, variables, endogenous_set, constraints)
+		new(model, endogenous, residuals, variables, endogenous_set, equations)
 	end
 end
 
-Block(model) = Block(model, VariableRef[], VariableRef[], Set{VariableRef}(), ConstraintRef[])
+Block(model) = Block(model, VariableRef[], VariableRef[], Set{VariableRef}(), Equation[])
 
 Base.length(b::Block) = length(b.endogenous)
 Base.iterate(b::Block) = iterate(b.endogenous)
 Base.iterate(b::Block, state) = iterate(b.endogenous, state)
-Base.copy(b::Block) = Block(b.model, copy(b.endogenous), copy(b.residuals), copy(b.variables), copy(b.constraints))
+Base.copy(b::Block) = Block(b.model, copy(b.endogenous), copy(b.residuals), copy(b.variables), copy(b.equations))
 
 """
     is_endogenous(var::VariableRef, b::Block) → Bool
@@ -462,15 +470,14 @@ function Block(
 	endogenous::AbstractArray{V},
 	residuals::AbstractArray{R},
 	variables::Set{VariableRef},
-	constraints::Vector{ConstraintRef}
+	equations::Vector{Equation}
 ) where {V<:VariableRef, R<:VariableRef}
-	Block(model, VariableRef[endogenous...], VariableRef[residuals...], variables, constraints)
+	Block(model, VariableRef[endogenous...], VariableRef[residuals...], variables, equations)
 end
 
 function Base.:+(a::Block, b::Block)
 	a.model == b.model || error("Cannot add $a and $b. Blocks must belong to the same model.")
 
-	# Check for overlap before combining
 	if overlaps(a, b)
 		shared = shared_endogenous(a, b)
 		formatted = format_variables(shared)
@@ -480,30 +487,26 @@ function Base.:+(a::Block, b::Block)
 	end
 
 	combined_vars = union(a.variables, b.variables)
-	combined_constraints = vcat(a.constraints, b.constraints)
-	Block(a.model, vcat(a.endogenous, b.endogenous), vcat(a.residuals, b.residuals), combined_vars, combined_constraints)
+	combined_eqs = vcat(a.equations, b.equations)
+	Block(a.model, vcat(a.endogenous, b.endogenous), vcat(a.residuals, b.residuals), combined_vars, combined_eqs)
 end
 
 function Base.:-(a::Block, b::Block)
 	a.model == b.model || error("Cannot subtract $b from $a. Blocks must belong to the same model.")
-	# Keep only pairs where endogenous variable is NOT in b
 	mask = [v ∉ b._endogenous_set for v in a.endogenous]
 	if !any(mask)
 		return Block(a.model)
 	end
-	# Filter constraints using the same mask (constraints are parallel to endogenous)
-	filtered_constraints = a.constraints[mask]
+	filtered_eqs = a.equations[mask]
 
-	# Collect all variables from remaining constraints
 	all_vars = Set{VariableRef}()
-	for c in filtered_constraints
-		collect_variables!(all_vars, constraint_object(c).func)
+	for eq in filtered_eqs
+		collect_variables!(all_vars, eq.func)
 	end
 
-	Block(a.model, a.endogenous[mask], a.residuals[mask], all_vars, filtered_constraints)
+	Block(a.model, a.endogenous[mask], a.residuals[mask], all_vars, filtered_eqs)
 end
 
-make_constraint_name(var) = SquareModels.CONSTRAINT_PREFIX * string(var)
 make_residual_name(var) = string(var) * SquareModels.RESIDUAL_SUFFIX
 
 """Cached version of JuMP.variable_by_name — O(1) after first call per model."""
@@ -554,14 +557,13 @@ function add_equation(model, endo::VariableRef, lhs, rhs=0)
 	resid = @variable(m, base_name = make_residual_name(var_name))
 	fix(resid, 0)
 
-	unregister(m, Symbol(make_constraint_name(var_name)))
-	con = JuMP.add_constraint(m, JuMP.ScalarConstraint(lhs - rhs + resid, JuMP.MOI.EqualTo(0.0)), make_constraint_name(var_name))
+	eq = Equation(lhs - rhs + resid, MOI.EqualTo(0.0))
 
 	all_vars = Set{VariableRef}([endo, resid])
 	collect_variables!(all_vars, lhs)
 	collect_variables!(all_vars, rhs)
 
-	Block(m, [endo], [resid], all_vars, ConstraintRef[con])
+	Block(m, [endo], [resid], all_vars, Equation[eq])
 end
 
 function add_equation!(block::Block, endo::VariableRef, lhs, rhs=0)
@@ -569,7 +571,7 @@ function add_equation!(block::Block, endo::VariableRef, lhs, rhs=0)
 	eq_block = add_equation(block.model, endo, lhs, rhs)
 	append!(block.endogenous, eq_block.endogenous)
 	append!(block.residuals, eq_block.residuals)
-	append!(block.constraints, eq_block.constraints)
+	append!(block.equations, eq_block.equations)
 	union!(block.variables, eq_block.variables)
 	push!(block._endogenous_set, endo)
 	return block
@@ -656,7 +658,7 @@ end
 
 """Collect index tuples from a JuMP container in iteration order."""
 _all_keys(c::AbstractArray) = vec(collect(Iterators.product(axes(c)...)))
-_all_keys(c::SparseAxisArray) = collect(keys(c.data))
+_all_keys(c::SparseAxisArray) = keys(c.data)
 _all_keys(c::SparseZeroArray) = _all_keys(c.data)
 
 """Flatten nested tuples in a key.
@@ -678,46 +680,51 @@ end
 _get_model(m::AbstractModel) = m
 # _get_model for ModelDictionary is defined after ModelDictionaries.jl is included
 
-"""Helper macro for Block macro - returns (endogenous, residuals, constraints) where constraints are vectors parallel to endogenous"""
+"""Split `lhs == rhs` into `(lhs - rhs)` expression at the AST level."""
+function _equality_to_diff(expr::Expr)
+	if expr.head == :call && expr.args[1] == :(==) && length(expr.args) == 3
+		lhs, rhs = expr.args[2], expr.args[3]
+		return :($lhs - ($rhs))
+	end
+	Expr(expr.head, [_equality_to_diff(a) for a in expr.args]...)
+end
+_equality_to_diff(x) = x
+
+"""Helper macro for Block macro - returns (endogenous, residuals, equations) where equations are vectors parallel to endogenous"""
 macro _block(container, ref_vars, constraint, extra...)
 	_error(str...) = JuMP._macro_error(:block, (container, ref_vars, constraint, extra...), __source__, str...)
 	code = Expr(:block)
 	base_sym = _get_name(ref_vars)
-	constraint_name = make_constraint_name(base_sym)
-	constraint_symbol = Symbol(constraint_name)
 	residual_name = make_residual_name(base_sym)
 	residual_symbol = Symbol(residual_name)
 
-	# Use _get_model to extract the JuMP model at runtime
 	model_expr = :(SquareModels._get_model($container))
 
-	push!(code.args, :(JuMP.unregister($model_expr, Symbol($constraint_name))))
-	# Create residual variable with same shape as original variable (using copy_variable)
 	push!(code.args, :(SquareModels.copy_variable($residual_name, $base_sym)))
 
-	# Transform constraint: replace endo with (endo + model[:endo_J])
 	transformed_constraint = _substitute_with_residual(constraint, _substitution_target(ref_vars), model_expr, residual_symbol)
+	diff_expr = _equality_to_diff(transformed_constraint)
 
 	if isa(ref_vars, Symbol)
-		# Scalar variable case - single constraint
 		macrocall = quote
 			let _m = $model_expr
-				cons = JuMP.@constraint(_m, $constraint_symbol, $transformed_constraint, $(extra...))
+				_func = JuMP.@expression(_m, $diff_expr)
 				endo = $ref_vars
 				resid = _m[$(QuoteNode(residual_symbol))]
-				([endo], [resid], ConstraintRef[cons])
+				eqs = SquareModels.Equation[SquareModels.Equation(_func, SquareModels.MOI.EqualTo(0.0))]
+				([endo], [resid], eqs)
 			end
 		end
 	elseif isexpr(ref_vars, :ref)
 		indices = ref_vars.args[2:end]
 		macrocall = quote
 			let _m = $model_expr
-				cons = JuMP.@constraint(_m, $constraint_symbol[$(indices...)], $transformed_constraint, $(extra...))
-				_ks = SquareModels._all_keys(cons)
+				_exprs = JuMP.@expression(_m, [$(indices...)], $diff_expr)
+				_ks = SquareModels._all_keys(_exprs)
 				endos = [SquareModels._index_var($base_sym, k) for k in _ks]
 				resids = [SquareModels._index_var(_m[$(QuoteNode(residual_symbol))], k) for k in _ks]
-				con_refs = ConstraintRef[cons[k...] for k in _ks]
-				(endos, resids, con_refs)
+				eqs = SquareModels.Equation[SquareModels.Equation(_exprs[k...], SquareModels.MOI.EqualTo(0.0)) for k in _ks]
+				(endos, resids, eqs)
 			end
 		end
 	else
@@ -730,18 +737,18 @@ end
 """
     @block model begin ... end
 
-Create a `Block` of constraints mapped to their endogenous variables.
+Create a `Block` of equations mapped to their endogenous variables.
 
 Each line in the block body specifies a variable (or indexed variable) followed by
-its defining equation. Constraints are automatically named with the prefix "E_"
-followed by the variable name.
+its defining equation. Equations are stored as lightweight `Equation` objects
+(expression + set) without registering JuMP constraints.
 
 # Arguments
-- `model`: The JuMP model to add constraints to
-- `begin ... end`: A block where each line is `variable, constraint_expr`
+- `model`: The JuMP model (or ModelDictionary) containing the variables
+- `begin ... end`: A block where each line is `variable, equation_expr`
 
 # Returns
-A `Block` containing the constraint-to-variable mappings.
+A `Block` containing the equation-to-variable mappings.
 
 # Examples
 ```julia
@@ -799,17 +806,15 @@ macro block(model, expr)
 	    results = [$code...]
 	    endogenous = Iterators.flatten([r[1] for r in results])
 	    residuals = Iterators.flatten([r[2] for r in results])
-	    cons = Iterators.flatten([r[3] for r in results])
+	    eqs = Iterators.flatten([r[3] for r in results])
 	    endo_vec = VariableRef[endogenous...]
 	    res_vec = VariableRef[residuals...]
-	    cons_vec = ConstraintRef[cons...]
-	    # Collect all variables from constraints
+	    eqs_vec = SquareModels.Equation[eqs...]
 	    all_vars = Set{VariableRef}()
-	    for c in cons_vec
-	        SquareModels.collect_variables!(all_vars, constraint_object(c).func)
+	    for eq in eqs_vec
+	        SquareModels.collect_variables!(all_vars, eq)
 	    end
-	    _block = Block(_model, endo_vec, res_vec, all_vars, cons_vec)
-	    # If container is a ModelDictionary, initialize residuals to 0
+	    _block = Block(_model, endo_vec, res_vec, all_vars, eqs_vec)
 	    if _container isa ModelDictionary
 	        _container[SquareModels.residuals(_block)] .= 0.0
 	    end

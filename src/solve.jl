@@ -1,7 +1,7 @@
 # solve.jl - Functions for solving blocks
 
-using JuMP: Model, VariableRef, ConstraintRef, AffExpr, QuadExpr, NonlinearExpr
-using JuMP: @variable, @constraint, constraint_object, name
+using JuMP: Model, VariableRef, AffExpr, QuadExpr, NonlinearExpr
+using JuMP: @variable, @constraint, name
 using JuMP: set_start_value, fix, has_lower_bound, has_upper_bound
 using JuMP: lower_bound, upper_bound, set_lower_bound, set_upper_bound
 using JuMP: all_variables, is_fixed, value, add_to_expression!
@@ -178,11 +178,9 @@ function _build_model(
         end
     end
 
-    # Transform and add constraints (residuals not in endogenous set get substituted from data)
-    for con_ref in block.constraints
-        con_obj = constraint_object(con_ref)
-        new_func = transform_expr(con_obj.func, var_map, data, endo_set)
-        @constraint(solve_model, new_func in con_obj.set)
+    for eq in block.equations
+        new_func = transform_expr(eq.func, var_map, data, endo_set)
+        @constraint(solve_model, new_func in eq.set)
     end
 
     return solve_model, var_map

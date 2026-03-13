@@ -12,7 +12,7 @@
 # substitution elasticity σ that best explains the data.
 
 import JuMP
-using JuMP: Model, set_silent, @objective, optimize!, set_lower_bound, set_upper_bound
+using JuMP: Model, set_silent, @variable, @objective, optimize!, set_lower_bound, set_upper_bound
 using Ipopt, SquareModels
 
 # ==============================================================================
@@ -69,39 +69,47 @@ println("Observed wages: ", round.(w_observed, digits=4))
 # ==============================================================================
 # Estimation: find σ by minimizing distance to observed wages
 # ==============================================================================
-# Solve the model at the starting σ to get consistent initial values
+# Build a JuMP optimization model with the structural equations as constraints
+est_model = JuMP.Model(Ipopt.Optimizer)
+set_silent(est_model)
+
+# Create variables in estimation model
+est_L = @variable(est_model, [j], lower_bound=0.01)
+est_w = @variable(est_model, [j], lower_bound=0.01)
+est_Y = @variable(est_model, lower_bound=0.01)
+est_p = @variable(est_model, lower_bound=0.01)
+est_σ = @variable(est_model, lower_bound=0.1, upper_bound=10.0)
+
+# Set starting values from a consistent solve
 data[σ] = 3.0
 initial = solve(model_eq, data; replace_nothing=1.0)
+JuMP.set_start_value.(est_L, [initial[L[jj]] for jj in j])
+JuMP.set_start_value.(est_w, [initial[w[jj]] for jj in j])
+JuMP.set_start_value(est_Y, initial[Y])
+JuMP.set_start_value(est_p, initial[p])
+JuMP.set_start_value(est_σ, 3.0)
 
-# Fix ALL variables to their values, then selectively unfix
-fix(initial)
+# Structural constraints with exogenous data substituted
+for jj in j
+    JuMP.@constraint(est_model, est_L[jj] == data[μ[jj]] * (est_w[jj] / est_p)^(-est_σ) * est_Y)
+    JuMP.@constraint(est_model, est_L[jj] == data[ρ[jj]] * data[N[jj]])
+end
+JuMP.@constraint(est_model, est_p * est_Y == sum(est_w[jj] * est_L[jj] for jj in j))
+JuMP.@constraint(est_model, est_p == 1)
 
-# Unfix the endogenous variables — they are determined by the structural equations
-unfix(model_eq)
+@objective(est_model, Min, sum((est_w[jj] - w_observed[jj])^2 for jj in j))
 
-# Also unfix σ — this creates one extra degree of freedom.
-# The system now has 7 constraints and 8 free variables (7 endogenous + σ),
-# so we need an objective to make the problem well-defined.
-unfix(σ)
-set_lower_bound(σ, 0.1)
-set_upper_bound(σ, 10.0)
-
-@objective(data.model, Min, sum((w[jj] - w_observed[jj])^2 for jj in j))
-
-set_start_value(initial)
-optimize!(data.model)
+optimize!(est_model)
 
 # ==============================================================================
 # Results
 # ==============================================================================
-println("\nEstimated σ = ", round(value(σ), digits=4), "  (true value: 1.8)")
+println("\nEstimated σ = ", round(JuMP.value(est_σ), digits=4), "  (true value: 1.8)")
 println("\nWage comparison:")
 for jj in j
-	println("  Sector $jj: model = ", round(value(w[jj]), digits=4),
+	println("  Sector $jj: model = ", round(JuMP.value(est_w[jj]), digits=4),
 	        ",  observed = ", round(w_observed[jj], digits=4))
 end
 
-# Recover solution as a ModelDictionary for use with SquareModels workflows
-estimated = value_dict(data.model)
-println("\nEstimated output Y = ", round(estimated[Y], digits=4),
+println("\nEstimated output Y = ", round(JuMP.value(est_Y), digits=4),
         "  (true: ", round(truth[Y], digits=4), ")")

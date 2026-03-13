@@ -1,4 +1,34 @@
-"""Helper function for endo_exo! macro"""
+"""Helper function for endo_exo! macro — single-pair swap (O(N) scan, no allocation)"""
+function _endo_exo!(block::Block, endo::AbstractVariableRef, exo::AbstractVariableRef, error_msg)
+	@assert isa(block, Block)
+
+	if !is_endogenous(exo, block)
+	    block_vars_preview = join(string.(block.endogenous[1:min(10, length(block.endogenous))]), ", ")
+	    if length(block.endogenous) > 10
+	        block_vars_preview *= ", ..."
+	    end
+
+	    error_parts = ["$exo is not endogenous and cannot be made exogenous: $error_msg"]
+	    push!(error_parts, "  Endogenous variables in block ($(length(block.endogenous))): $block_vars_preview")
+
+	    if is_endogenous(endo, block) && exo ∈ block
+	        push!(error_parts, "  Did you swap the arguments? Try: @endo_exo!(block, $exo, $endo)")
+	    end
+
+	    error(join(error_parts, "\n"))
+	end
+
+	if endo ∉ block.variables
+	    error("$endo does not appear in the block's constraints and cannot be endogenized: $error_msg")
+	end
+
+	idx = findfirst(==(exo), block.endogenous)
+	block.endogenous[idx] = endo
+	delete!(block._endogenous_set, exo)
+	push!(block._endogenous_set, endo)
+end
+
+"""Helper function for endo_exo! macro — batch swap with Dict-based O(1) lookup"""
 function _endo_exo!(block::Block, endos, exos, error_msg)
 	@assert isa(block, Block)
 
@@ -10,6 +40,9 @@ function _endo_exo!(block::Block, endos, exos, error_msg)
 	          "  exo variables ($(length(exos))): $exo_names")
 	end
 
+	# Build reverse index for O(1) lookup per swap
+	idx_map = Dict{VariableRef, Int}(v => i for (i, v) in enumerate(block.endogenous))
+
 	for (endo, exo) in zip(endos, exos)
 	    if !is_endogenous(exo, block)
 	        block_vars_preview = join(string.(block.endogenous[1:min(10, length(block.endogenous))]), ", ")
@@ -20,7 +53,6 @@ function _endo_exo!(block::Block, endos, exos, error_msg)
 	        error_parts = ["$exo is not endogenous and cannot be made exogenous: $error_msg"]
 	        push!(error_parts, "  Endogenous variables in block ($(length(block.endogenous))): $block_vars_preview")
 
-	        # Only suggest swap if it would actually work
 	        if is_endogenous(endo, block) && exo ∈ block
 	            push!(error_parts, "  Did you swap the arguments? Try: @endo_exo!(block, $exo, $endo)")
 	        end
@@ -32,17 +64,14 @@ function _endo_exo!(block::Block, endos, exos, error_msg)
 	        error("$endo does not appear in the block's constraints and cannot be endogenized: $error_msg")
 	    end
 
-	    # Find index of exo variable and replace with endo
-	    idx = findfirst(==(exo), block.endogenous)
+	    idx = idx_map[exo]
 	    block.endogenous[idx] = endo
+	    delete!(idx_map, exo)
+	    idx_map[endo] = idx
 
-	    # Update the set
 	    delete!(block._endogenous_set, exo)
 	    push!(block._endogenous_set, endo)
 	end
-end
-function _endo_exo!(block::Block, endos::AbstractVariableRef, exos::AbstractVariableRef, error_msg)
-	_endo_exo!(block, [endos], [exos], error_msg)
 end
 
 """
