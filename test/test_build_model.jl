@@ -463,6 +463,137 @@ end
     @test length(var_map) == 2
 end
 
+@testset "diagnose detects effectively trivial equation from zero coefficient" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        a
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[a] = 0.0
+
+    block = @block model begin
+        x, a * x == 5
+    end
+    data[residuals(block)] .= 0.0
+
+    # a=0 zeroes out x: equation becomes 0 == 5 (infeasible trivial)
+    trivial, orphans = diagnose(block, data)
+    @test length(trivial) == 1
+    @test name(trivial[1].endogenous) == "x"
+    @test trivial[1].constant_value ≈ -5.0
+
+    orphan_names = [name(o.endogenous) for o in orphans]
+    @test "x" in orphan_names
+end
+
+@testset "diagnose detects effectively orphaned variable from zero coefficient" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        z
+        a
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[z] = 3.0
+    data[a] = 0.0
+
+    block = @block model begin
+        x, x == 10
+        z, x + a * z == 5
+    end
+    data[residuals(block)] .= 0.0
+
+    # eq2: a=0 zeroes out z, but x keeps the equation non-trivial → z is orphaned
+    trivial, orphans = diagnose(block, data)
+    @test isempty(trivial)
+    @test length(orphans) == 1
+    @test name(orphans[1].endogenous) == "z"
+end
+
+@testset "diagnose detects orphan from zero multiplication in nonlinear expression" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        z
+        a
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[z] = 3.0
+    data[a] = 0.0
+
+    b1 = @block model begin
+        x, x == 10
+    end
+    data[residuals(b1)] .= 0.0
+
+    # z's equation involves a * sin(z), but a=0 → sin(z) branch is zeroed out
+    b2 = add_equation(model, z, x + a * sin(z), 5)
+    data[residuals(b2)] .= 0.0
+    block = b1 + b2
+
+    trivial, orphans = diagnose(block, data)
+    @test isempty(trivial)
+    @test length(orphans) == 1
+    @test name(orphans[1].endogenous) == "z"
+end
+
+@testset "diagnose: no false positive with nonzero coefficient" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        z
+        a
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[z] = 3.0
+    data[a] = 2.0
+
+    block = @block model begin
+        x, x == 10
+        z, x + a * z == 5
+    end
+    data[residuals(block)] .= 0.0
+
+    trivial, orphans = diagnose(block, data)
+    @test isempty(trivial)
+    @test isempty(orphans)
+end
+
+@testset "solve errors on effectively orphaned variable" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        z
+        a
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[z] = 3.0
+    data[a] = 0.0
+
+    block = @block model begin
+        x, x == 10
+        z, x + a * z == 5
+    end
+    data[residuals(block)] .= 0.0
+
+    @test_throws ErrorException solve(block, data)
+
+    # skip_diagnostics lets it through
+    solve_model, var_map = _build_model(block, data; skip_diagnostics=true)
+    @test length(var_map) == 2
+end
+
 @testset "solve succeeds on healthy model (diagnostics enabled)" begin
     model = Model(Ipopt.Optimizer)
     JuMP.@variables model begin

@@ -145,7 +145,81 @@ end
 _constant_value(x::Number) = Float64(x)
 _constant_value(expr::AffExpr) = Float64(expr.constant)
 _constant_value(expr::QuadExpr) = Float64(expr.aff.constant)
+_constant_value(expr::NonlinearExpr) = _is_trivially_zero(expr) ? 0.0 : NaN
 _constant_value(_) = NaN
+
+# ============================================================================
+# Effective variable analysis (zero-coefficient / zero-multiplication detection)
+# ============================================================================
+# A variable can be syntactically present in an expression but contribute nothing
+# to its value — e.g. x * 0, or an AffExpr term with coefficient 0.0.
+# These functions detect such cases for improved diagnostics.
+
+"""Check if an expression is trivially zero regardless of variable values (e.g. `x * 0`)."""
+_is_trivially_zero(::VariableRef) = false
+_is_trivially_zero(x::Number) = iszero(x)
+_is_trivially_zero(::Zero) = true
+_is_trivially_zero(expr::AffExpr) = iszero(expr.constant) && all(iszero, values(expr.terms))
+function _is_trivially_zero(expr::QuadExpr)
+    _is_trivially_zero(expr.aff) && all(iszero, values(expr.terms))
+end
+function _is_trivially_zero(expr::NonlinearExpr)
+    if expr.head === :*
+        any(_is_trivially_zero, expr.args)
+    elseif expr.head === :+ || expr.head === :-
+        all(_is_trivially_zero, expr.args)
+    elseif expr.head === :^ && length(expr.args) == 2
+        _is_trivially_zero(expr.args[1]) && expr.args[2] isa Number && expr.args[2] > 0
+    else
+        false
+    end
+end
+
+"""Like `_has_variables` but ignores variables in trivially-zero subtrees or with zero coefficients."""
+_has_effective_variables(::Number) = false
+_has_effective_variables(::Zero) = false
+_has_effective_variables(::VariableRef) = true
+_has_effective_variables(expr::AffExpr) = any(!iszero(c) for (_, c) in expr.terms)
+function _has_effective_variables(expr::QuadExpr)
+    any(!iszero(c) for (_, c) in expr.terms) ||
+    any(!iszero(c) for (_, c) in expr.aff.terms)
+end
+function _has_effective_variables(expr::NonlinearExpr)
+    _is_trivially_zero(expr) && return false
+    any(_has_effective_variables(arg) for arg in expr.args)
+end
+
+"""Like `collect_variables!` but skips variables in trivially-zero subtrees or with zero coefficients."""
+_collect_effective_variables!(vars::Set{VariableRef}, ::Union{Number, Zero}) = vars
+function _collect_effective_variables!(vars::Set{VariableRef}, var::VariableRef)
+    push!(vars, var)
+    vars
+end
+function _collect_effective_variables!(vars::Set{VariableRef}, expr::AffExpr)
+    for (var, coef) in expr.terms
+        iszero(coef) || push!(vars, var)
+    end
+    vars
+end
+function _collect_effective_variables!(vars::Set{VariableRef}, expr::QuadExpr)
+    for (var, coef) in expr.aff.terms
+        iszero(coef) || push!(vars, var)
+    end
+    for (pair, coef) in expr.terms
+        if !iszero(coef)
+            push!(vars, pair.a)
+            push!(vars, pair.b)
+        end
+    end
+    vars
+end
+function _collect_effective_variables!(vars::Set{VariableRef}, expr::NonlinearExpr)
+    _is_trivially_zero(expr) && return vars
+    for arg in expr.args
+        _collect_effective_variables!(vars, arg)
+    end
+    vars
+end
 
 # ============================================================================
 # Diagnostics
@@ -168,11 +242,14 @@ end
 Analyze a block for structural issues that would cause solver failures.
 
 Substitutes exogenous values from `data` into each equation and checks for:
-- **Trivial equations**: equations that reduce to `constant == 0` after substitution,
-  meaning no endogenous variable appears. These are silently dropped by some solvers
-  (e.g. GAMS), breaking squareness.
-- **Orphan variables**: endogenous variables that don't appear in any equation after
-  substitution, leaving them undetermined.
+- **Trivial equations**: equations where no endogenous variable effectively contributes
+  after substitution. This includes both fully constant expressions and expressions where
+  all variable terms have zero coefficients (e.g. `x * 0`). These are silently dropped
+  by some solvers (e.g. GAMS), breaking squareness.
+- **Orphan variables**: endogenous variables that don't effectively appear in any
+  non-trivial equation after substitution, leaving them undetermined. A variable is
+  considered absent if it only appears with zero coefficients or inside trivially-zero
+  subtrees (e.g. multiplied by zero).
 
 Returns `(trivial, orphans)` — a `Vector{TrivialEquation}` and a `Vector{OrphanVariable}`.
 
@@ -199,10 +276,10 @@ function diagnose(block::Block, data::ModelDictionary)
 
     for (i, eq) in enumerate(block.equations)
         new_func = transform_expr(eq.func, var_map, data, endo_set)
-        if !_has_variables(new_func)
+        if !_has_effective_variables(new_func)
             push!(trivial, TrivialEquation(i, block.endogenous[i], block.residuals[i], _constant_value(new_func)))
         else
-            collect_variables!(vars_in_equations, new_func)
+            _collect_effective_variables!(vars_in_equations, new_func)
         end
     end
 
@@ -216,15 +293,19 @@ end
 function _format_diagnostic_error(trivial::Vector{TrivialEquation}, orphans::Vector{OrphanVariable})
     lines = String[]
     if !isempty(trivial)
-        push!(lines, "$(length(trivial)) trivial equation(s) (no endogenous variables after substituting exogenous data):")
+        push!(lines, "$(length(trivial)) trivial equation(s) (no endogenous variables effectively present after substituting exogenous data):")
         for t in trivial
             rhs = t.constant_value
-            status = abs(rhs) < 1e-12 ? "0 = 0 (redundant)" : "$(rhs) = 0 (infeasible!)"
-            push!(lines, "  Eq $(t.index): $(name(t.endogenous)) — $status")
+            if isnan(rhs)
+                push!(lines, "  Eq $(t.index): $(name(t.endogenous)) — effectively trivial (constant value could not be determined)")
+            else
+                status = abs(rhs) < 1e-12 ? "0 = 0 (redundant)" : "$(rhs) = 0 (infeasible!)"
+                push!(lines, "  Eq $(t.index): $(name(t.endogenous)) — $status")
+            end
         end
     end
     if !isempty(orphans)
-        push!(lines, "$(length(orphans)) orphan variable(s) (not in any non-trivial equation):")
+        push!(lines, "$(length(orphans)) orphan variable(s) (not effectively present in any non-trivial equation):")
         for o in orphans
             push!(lines, "  $(name(o.endogenous))")
         end
@@ -293,11 +374,11 @@ function _build_model(
         new_func = transform_expr(eq.func, var_map, data, endo_set)
         @constraint(solve_model, new_func in eq.set)
         if !skip_diagnostics
-            if !_has_variables(new_func)
+            if !_has_effective_variables(new_func)
                 push!(trivial, TrivialEquation(i, block.endogenous[i], block.residuals[i], _constant_value(new_func)))
             else
                 solve_vars = Set{VariableRef}()
-                collect_variables!(solve_vars, new_func)
+                _collect_effective_variables!(solve_vars, new_func)
                 for sv in solve_vars
                     orig = get(reverse_map, sv, nothing)
                     orig !== nothing && push!(endos_used, orig)
