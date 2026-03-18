@@ -266,4 +266,225 @@ end
     @test data[y] ≈ 2.0 atol=1e-6
 end
 
+@testset "diagnose: no false positive after endo-exo swap" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        y
+        z
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[y] = 2.0
+    data[z] = 3.0
+
+    block = @block model begin
+        x, x == 5
+        y, y == z * 2
+    end
+    data[residuals(block)] .= 0.0
+
+    # Exogenize x (make residual x_J endogenous), so the equation for x becomes:
+    # x_value + x_J == 5 → after substitution, x_J == 5 - 1 = 4, still has a variable (x_J)
+    # Instead, we need to create a truly trivial equation. Swap y out, z in:
+    cal_block = copy(block)
+    @endo_exo! cal_block begin
+        z, y
+    end
+    # Now: eq1 is "x + x_J == 5" (x endo) — fine
+    #      eq2 is "y_data + y_J == z * 2" (z endo) — fine
+    trivial, orphans = diagnose(cal_block, data)
+    @test isempty(trivial)
+    @test isempty(orphans)
+end
+
+@testset "diagnose: no false positive after calibration swap" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        y
+        a
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 5.0
+    data[y] = 10.0
+    data[a] = 0.0  # multiplier is zero
+
+    # x, x == a * y  → after substitution: x + x_J == 0*10 = 0
+    # But x is endogenous, so it stays as a variable. That's not trivial.
+    # To get a truly trivial equation, we need all variables in the equation to be exogenous.
+    # Exogenize x, endogenize x_J:
+    block = @block model begin
+        x, x == a * y
+        y, y == 10
+    end
+    data[residuals(block)] .= 0.0
+
+    cal_block = copy(block)
+    @endo_exo! cal_block begin
+        residuals(cal_block)[1], x
+    end
+    # Now eq1: "x_data + x_J == a * y" → x_J is endogenous, a and y are exogenous
+    # After sub: x_J_solve == 0*10 - 5 = -5. x_J is still a variable, not trivial.
+
+    # For a truly trivial equation: all vars in the equation become exogenous after swap.
+    # This happens when the endo var doesn't actually appear in its own equation.
+    # Build manually: endo=y, equation="a == a" (where a is exogenous)
+    model2 = Model(Ipopt.Optimizer)
+    JuMP.@variables model2 begin
+        p
+        q
+        c
+    end
+    data2 = ModelDictionary(model2)
+    data2[p] = 1.0
+    data2[q] = 2.0
+    data2[c] = 3.0
+
+    block2 = @block model2 begin
+        p, p == c
+        q, q == c
+    end
+    data2[residuals(block2)] .= 0.0
+
+    # Exogenize both p and q — their residuals become endo
+    cal2 = copy(block2)
+    @endo_exo! cal2 begin
+        residuals(cal2)[1], p
+        residuals(cal2)[2], q
+    end
+    # eq1: "p_data + p_J == c" → p_J_solve == 3 - 1 = 2 (has variable p_J, not trivial)
+    trivial2, orphans2 = diagnose(cal2, data2)
+    @test isempty(trivial2)
+end
+
+@testset "diagnose detects orphan variable" begin
+    # z is endogenous but doesn't appear in its own equation (or any equation)
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        y
+        z
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[y] = 2.0
+    data[z] = 3.0
+
+    b1 = @block model begin
+        x, x == 10
+    end
+    data[residuals(b1)] .= 0.0
+
+    # Pair z with an equation that only references x and y (z never appears)
+    b2 = add_equation(model, z, y - x, 0)
+    data[residuals(b2)] .= 0.0
+    block = b1 + b2
+
+    # eq2 is "y - x + z_J == 0". After substitution, z_J is exogenous (fixed=0),
+    # y and x are mixed: x is endogenous (in eq1), y is exogenous.
+    # Result: eq2 still has variable x, so it's NOT trivial.
+    # But z is endogenous and appears in NO equation — it's an orphan.
+    trivial, orphans = diagnose(block, data)
+    @test isempty(trivial)
+    orphan_names = [name(o.endogenous) for o in orphans]
+    @test "z" in orphan_names
+end
+
+@testset "diagnose detects truly trivial equation" begin
+    # Build a case where an equation reduces to a constant.
+    # This happens when the endogenous variable doesn't appear in the equation,
+    # AND all variables in the equation are exogenous.
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        y
+        a
+        b
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[y] = 2.0
+    data[a] = 3.0
+    data[b] = 4.0
+
+    b1 = @block model begin
+        x, x == 10
+    end
+    data[residuals(b1)] .= 0.0
+
+    # Pair y with an equation involving only exogenous a and b
+    b2 = add_equation(model, y, a - b, 0)  # a - b + y_J == 0, y is endo but not in eq
+    data[residuals(b2)] .= 0.0
+    block = b1 + b2
+
+    # eq2: "a - b + y_J == 0". a, b, y_J are all exogenous.
+    # After substitution: 3 - 4 + 0 = -1 (constant). Truly trivial.
+    # y is endogenous but appears in no equation → orphan.
+    trivial, orphans = diagnose(block, data)
+    @test length(trivial) == 1
+    @test name(trivial[1].endogenous) == "y"
+    @test trivial[1].constant_value ≈ -1.0
+
+    orphan_names = [name(o.endogenous) for o in orphans]
+    @test "y" in orphan_names
+end
+
+@testset "solve errors on orphan variable" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        y
+        z
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[y] = 2.0
+    data[z] = 3.0
+
+    b1 = @block model begin
+        x, x == 10
+    end
+    data[residuals(b1)] .= 0.0
+
+    b2 = add_equation(model, z, y - x, 0)
+    data[residuals(b2)] .= 0.0
+    block = b1 + b2
+
+    @test_throws ErrorException solve(block, data)
+
+    # skip_diagnostics allows it through (solver may still fail)
+    solve_model, var_map = _build_model(block, data; skip_diagnostics=true)
+    @test length(var_map) == 2
+end
+
+@testset "solve succeeds on healthy model (diagnostics enabled)" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        y
+        z
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[y] = 2.0
+    data[z] = 5.0
+
+    block = @block model begin
+        x, x == z * 2
+        y, y == z * 3
+    end
+    data[residuals(block)] .= 0.0
+
+    solution = solve(block, data)
+    @test solution[x] ≈ 10.0 atol=1e-6
+    @test solution[y] ≈ 15.0 atol=1e-6
+end
+
 end # module

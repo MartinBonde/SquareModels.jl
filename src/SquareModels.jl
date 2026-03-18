@@ -14,7 +14,7 @@ export ModelDictionary, fix, unfix, set_start_value, value, value_dict, add_miss
 export keys_match, assert_no_diff
 export unload, load
 export RESIDUAL_SUFFIX
-export solve, solve!
+export solve, solve!, diagnose
 export Tag, description, tags, has_tag, tagged, metadata
 export SparseZeroArray, ∑, use_sparse_zero_array!
 

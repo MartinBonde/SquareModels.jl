@@ -123,6 +123,116 @@ function transform_expr(expr::NonlinearExpr, var_map, data, endo_set)
 end
 
 # ============================================================================
+# Expression analysis
+# ============================================================================
+
+"""Check if a JuMP expression contains any VariableRef (allocation-free)."""
+_has_variables(::Number) = false
+_has_variables(::Zero) = false
+_has_variables(::VariableRef) = true
+_has_variables(expr::AffExpr) = !isempty(expr.terms)
+function _has_variables(expr::QuadExpr)
+    !isempty(expr.terms) || !isempty(expr.aff.terms)
+end
+function _has_variables(expr::NonlinearExpr)
+    for arg in expr.args
+        _has_variables(arg) && return true
+    end
+    return false
+end
+
+"""Extract the constant value from a variable-free expression."""
+_constant_value(x::Number) = Float64(x)
+_constant_value(expr::AffExpr) = Float64(expr.constant)
+_constant_value(expr::QuadExpr) = Float64(expr.aff.constant)
+_constant_value(_) = NaN
+
+# ============================================================================
+# Diagnostics
+# ============================================================================
+
+struct TrivialEquation
+    index::Int
+    endogenous::VariableRef
+    residual::VariableRef
+    constant_value::Float64
+end
+
+struct OrphanVariable
+    endogenous::VariableRef
+end
+
+"""
+    diagnose(block::Block, data::ModelDictionary)
+
+Analyze a block for structural issues that would cause solver failures.
+
+Substitutes exogenous values from `data` into each equation and checks for:
+- **Trivial equations**: equations that reduce to `constant == 0` after substitution,
+  meaning no endogenous variable appears. These are silently dropped by some solvers
+  (e.g. GAMS), breaking squareness.
+- **Orphan variables**: endogenous variables that don't appear in any equation after
+  substitution, leaving them undetermined.
+
+Returns `(trivial, orphans)` — a `Vector{TrivialEquation}` and a `Vector{OrphanVariable}`.
+
+# Example
+```julia
+trivial, orphans = diagnose(block, data)
+for t in trivial
+    println("Equation \$(t.index) for \$(name(t.endogenous)) is trivial (value=\$(t.constant_value))")
+end
+for o in orphans
+    println("Orphan: \$(name(o.endogenous))")
+end
+```
+"""
+function diagnose(block::Block, data::ModelDictionary)
+    endo_set = block._endogenous_set
+    var_map = Dict{VariableRef, VariableRef}()
+    for endo_var in block.endogenous
+        var_map[endo_var] = endo_var  # identity map — we only need to detect variable presence
+    end
+
+    trivial = TrivialEquation[]
+    vars_in_equations = Set{VariableRef}()
+
+    for (i, eq) in enumerate(block.equations)
+        new_func = transform_expr(eq.func, var_map, data, endo_set)
+        if !_has_variables(new_func)
+            push!(trivial, TrivialEquation(i, block.endogenous[i], block.residuals[i], _constant_value(new_func)))
+        else
+            collect_variables!(vars_in_equations, new_func)
+        end
+    end
+
+    orphans = OrphanVariable[
+        OrphanVariable(v) for v in block.endogenous if v ∉ vars_in_equations
+    ]
+
+    return trivial, orphans
+end
+
+function _format_diagnostic_error(trivial::Vector{TrivialEquation}, orphans::Vector{OrphanVariable})
+    lines = String[]
+    if !isempty(trivial)
+        push!(lines, "$(length(trivial)) trivial equation(s) (no endogenous variables after substituting exogenous data):")
+        for t in trivial
+            rhs = t.constant_value
+            status = abs(rhs) < 1e-12 ? "0 = 0 (redundant)" : "$(rhs) = 0 (infeasible!)"
+            push!(lines, "  Eq $(t.index): $(name(t.endogenous)) — $status")
+        end
+    end
+    if !isempty(orphans)
+        push!(lines, "$(length(orphans)) orphan variable(s) (not in any non-trivial equation):")
+        for o in orphans
+            push!(lines, "  $(name(o.endogenous))")
+        end
+    end
+    join(lines, "\n")
+end
+
+# ============================================================================
 # _build_model (internal)
 # ============================================================================
 
@@ -136,18 +246,17 @@ function _build_model(
     block::Block,
     data::ModelDictionary;
     start_values::Union{Nothing, ModelDictionary} = nothing,
-    replace_nothing::Union{Nothing, Number} = nothing
+    replace_nothing::Union{Nothing, Number} = nothing,
+    skip_diagnostics::Bool = false
 )
     solve_model = _copy_model_config(block.model)
     endo_set = block._endogenous_set
 
-    # Create endogenous variables in solve model
     var_map = sizehint!(Dict{VariableRef, VariableRef}(), length(block.endogenous))
     for endo_var in block.endogenous
         new_var = @variable(solve_model)
         var_map[endo_var] = new_var
 
-        # Transfer bounds from original model
         if has_lower_bound(endo_var)
             set_lower_bound(new_var, lower_bound(endo_var))
         end
@@ -155,7 +264,6 @@ function _build_model(
             set_upper_bound(new_var, upper_bound(endo_var))
         end
 
-        # Set start value (start_values takes precedence over data)
         start_val = nothing
         if start_values !== nothing
             try
@@ -169,7 +277,6 @@ function _build_model(
             catch
             end
         end
-        # Apply replace_nothing if start_val is still nothing
         if start_val === nothing && replace_nothing !== nothing
             start_val = replace_nothing
         end
@@ -178,9 +285,33 @@ function _build_model(
         end
     end
 
-    for eq in block.equations
+    trivial = skip_diagnostics ? nothing : TrivialEquation[]
+    endos_used = skip_diagnostics ? nothing : Set{VariableRef}()
+    reverse_map = skip_diagnostics ? nothing : Dict{VariableRef, VariableRef}(v => k for (k, v) in var_map)
+
+    for (i, eq) in enumerate(block.equations)
         new_func = transform_expr(eq.func, var_map, data, endo_set)
         @constraint(solve_model, new_func in eq.set)
+        if !skip_diagnostics
+            if !_has_variables(new_func)
+                push!(trivial, TrivialEquation(i, block.endogenous[i], block.residuals[i], _constant_value(new_func)))
+            else
+                solve_vars = Set{VariableRef}()
+                collect_variables!(solve_vars, new_func)
+                for sv in solve_vars
+                    orig = get(reverse_map, sv, nothing)
+                    orig !== nothing && push!(endos_used, orig)
+                end
+            end
+        end
+    end
+
+    if !skip_diagnostics
+        orphans = OrphanVariable[OrphanVariable(v) for v in block.endogenous if v ∉ endos_used]
+        if !isempty(trivial) || !isempty(orphans)
+            error("Model is not effectively square after substituting exogenous values.\n" *
+                  _format_diagnostic_error(trivial, orphans))
+        end
     end
 
     return solve_model, var_map
@@ -191,12 +322,15 @@ end
 # ============================================================================
 
 """
-    solve(block::Block, data::ModelDictionary; start_values=nothing, replace_nothing=nothing)
+    solve(block::Block, data::ModelDictionary; start_values=nothing, replace_nothing=nothing, skip_diagnostics=false)
 
 Build, optimize, and extract solution in one step.
 
 Uses the optimizer from the block's model. Creates an intermediate solve model with only
 endogenous variables, optimizes it, and returns a new ModelDictionary with the solution.
+
+Before solving, runs diagnostics to detect trivial equations and orphan variables
+(set `skip_diagnostics=true` to disable if performance is a concern).
 
 Optimizer attributes (silent mode, time limit) are copied from the block's model to the
 intermediate solve model. Use `set_silent(model)` or `set_time_limit_sec(model, seconds)`
@@ -208,6 +342,7 @@ on the original model to configure solver behavior.
 - `start_values::Union{Nothing, ModelDictionary}`: Optional starting values (overrides `data`)
 - `replace_nothing::Union{Nothing, Number}`: If provided, replace `nothing` values in start
   values with this number. If not provided, `nothing` values will cause errors.
+- `skip_diagnostics::Bool`: Skip pre-solve diagnostic checks (default `false`)
 
 # Returns
 A new `ModelDictionary` containing the solution values for endogenous variables,
@@ -241,19 +376,23 @@ function solve(
     block::Block,
     data::ModelDictionary;
     start_values::Union{Nothing, ModelDictionary} = nothing,
-    replace_nothing::Union{Nothing, Number} = nothing
+    replace_nothing::Union{Nothing, Number} = nothing,
+    skip_diagnostics::Bool = false
 )
     result = copy(data)
-    solve!(block, result; start_values, replace_nothing)
+    solve!(block, result; start_values, replace_nothing, skip_diagnostics)
     return result
 end
 
 """
-    solve!(block::Block, data::ModelDictionary; start_values=nothing, replace_nothing=nothing)
+    solve!(block::Block, data::ModelDictionary; start_values=nothing, replace_nothing=nothing, skip_diagnostics=false)
 
 Build, optimize, and update data in-place.
 
 Like `solve`, but mutates `data` instead of returning a new ModelDictionary.
+
+Before solving, runs diagnostics to detect trivial equations and orphan variables
+(set `skip_diagnostics=true` to disable if performance is a concern).
 
 Optimizer attributes (silent mode, time limit) are copied from the block's model to the
 intermediate solve model. Use `set_silent(model)` or `set_time_limit_sec(model, seconds)`
@@ -265,6 +404,7 @@ on the original model to configure solver behavior.
 - `start_values::Union{Nothing, ModelDictionary}`: Optional starting values (overrides `data`)
 - `replace_nothing::Union{Nothing, Number}`: If provided, replace `nothing` values in start
   values with this number. If not provided, `nothing` values will cause errors.
+- `skip_diagnostics::Bool`: Skip pre-solve diagnostic checks (default `false`)
 
 # Returns
 The mutated `data` ModelDictionary.
@@ -278,9 +418,10 @@ function solve!(
     block::Block,
     data::ModelDictionary;
     start_values::Union{Nothing, ModelDictionary} = nothing,
-    replace_nothing::Union{Nothing, Number} = nothing
+    replace_nothing::Union{Nothing, Number} = nothing,
+    skip_diagnostics::Bool = false
 )
-    model, var_map = _build_model(block, data; start_values, replace_nothing)
+    model, var_map = _build_model(block, data; start_values, replace_nothing, skip_diagnostics)
     optimize!(model)
 
     for (original_var, solve_var) in var_map
