@@ -55,7 +55,7 @@ end
     db[Y] = 150.0; db[L] = 100.0; db[A] = 1.0
     db[residuals(block)] .= 0.0
 
-    @endo_exo! block begin
+    @endo_exo_swap! block begin
         A, Y
         residuals(block)[2], L
     end

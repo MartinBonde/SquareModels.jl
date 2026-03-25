@@ -23,7 +23,7 @@ end
 # Helpers: IO-like model at GREU scale
 # ==============================================================================
 
-function build_io_endo_exo_model(; n_i=50, n_d=30, n_t=16, sparsity=0.7, seed=42)
+function build_io_endo_exo_swap_model(; n_i=50, n_d=30, n_t=16, sparsity=0.7, seed=42)
     m = Model()
 
     I = 1:n_i
@@ -82,10 +82,10 @@ function build_io_endo_exo_model(; n_i=50, n_d=30, n_t=16, sparsity=0.7, seed=42
 end
 
 # ==============================================================================
-# Test 1 — _endo_exo! vector swap at simple scale
+# Test 1 — _endo_exo_swap! vector swap at simple scale
 # ==============================================================================
 
-@testset "Perf: _endo_exo! simple" begin
+@testset "Perf: _endo_exo_swap! simple" begin
     n = 5000
 
     function setup()
@@ -99,20 +99,20 @@ end
         (; block, x, x_exo)
     end
 
-    t_swap = bench_fresh(setup, io -> SquareModels._endo_exo!(io.block, io.x_exo, io.x, "bench"))
+    t_swap = bench_fresh(setup, io -> SquareModels._endo_exo_swap!(io.block, io.x_exo, io.x, "bench"))
 
     println()
-    println("  _endo_exo! ($n swaps in one call)")
+    println("  _endo_exo_swap! ($n swaps in one call)")
     println("  └─ Time: $(round(t_swap * 1000, digits=1)) ms")
 
     @test t_swap < 1.0
 end
 
 # ==============================================================================
-# Test 2 — Sequential single-pair @endo_exo! calls (the actual GREU pattern)
+# Test 2 — Sequential single-pair @endo_exo_swap! calls (the actual GREU pattern)
 # ==============================================================================
 
-@testset "Perf: sequential endo_exo swaps" begin
+@testset "Perf: sequential endo_exo_swap swaps" begin
     n = 5000
 
     function setup()
@@ -128,7 +128,7 @@ end
 
     t_seq = bench_fresh(setup, function(io)
         for i in 1:n
-            SquareModels._endo_exo!(io.block, io.x_exo[i], io.x[i], "bench")
+            SquareModels._endo_exo_swap!(io.block, io.x_exo[i], io.x[i], "bench")
         end
     end)
 
@@ -144,7 +144,7 @@ end
 # ==============================================================================
 
 @testset "Perf: @block at IO-scale" begin
-    io = build_io_endo_exo_model()
+    io = build_io_endo_exo_swap_model()
 
     t_block = bench() do
         io.make_block()
@@ -158,11 +158,11 @@ end
 end
 
 # ==============================================================================
-# Test 4 — _endo_exo! at IO-scale (with realistic block from IO model)
+# Test 4 — _endo_exo_swap! at IO-scale (with realistic block from IO model)
 # ==============================================================================
 
-@testset "Perf: endo_exo at IO-scale" begin
-    io = build_io_endo_exo_model()
+@testset "Perf: endo_exo_swap at IO-scale" begin
+    io = build_io_endo_exo_swap_model()
 
     function setup()
         block = io.make_block()
@@ -172,25 +172,25 @@ end
     end
 
     t_swap = bench_fresh(setup, function(s)
-        SquareModels._endo_exo!(s.block, s.resids, s.endos, "bench")
+        SquareModels._endo_exo_swap!(s.block, s.resids, s.endos, "bench")
     end)
 
     block = io.make_block()
     n_endo = length(endogenous(block))
 
     println()
-    println("  _endo_exo! at IO-scale ($n_endo swaps)")
+    println("  _endo_exo_swap! at IO-scale ($n_endo swaps)")
     println("  └─ Time: $(round(t_swap * 1000, digits=1)) ms")
 
     @test t_swap < 2.0
 end
 
 # ==============================================================================
-# Test 5 — Sequential endo_exo at IO-scale (the GREU pattern)
+# Test 5 — Sequential endo_exo_swap at IO-scale (the GREU pattern)
 # ==============================================================================
 
-@testset "Perf: sequential endo_exo at IO-scale" begin
-    io = build_io_endo_exo_model()
+@testset "Perf: sequential endo_exo_swap at IO-scale" begin
+    io = build_io_endo_exo_swap_model()
 
     function setup()
         block = io.make_block()
@@ -201,7 +201,7 @@ end
 
     t_seq = bench_fresh(setup, function(s)
         for (endo, resid) in zip(s.endos, s.resids)
-            SquareModels._endo_exo!(s.block, resid, endo, "bench")
+            SquareModels._endo_exo_swap!(s.block, resid, endo, "bench")
         end
     end)
 
@@ -209,7 +209,7 @@ end
     n_endo = length(endogenous(block))
 
     println()
-    println("  Sequential endo_exo at IO-scale ($n_endo swaps)")
+    println("  Sequential endo_exo_swap at IO-scale ($n_endo swaps)")
     println("  └─ Time: $(round(t_seq * 1000, digits=1)) ms")
 
     @test t_seq < 5.0

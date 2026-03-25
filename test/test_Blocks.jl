@@ -126,7 +126,7 @@ end
 	@test all(isapprox(result[i], 1; atol=1e-6) for i in b)
 end
 
-@testset "_endo_exo!" begin
+@testset "_endo_exo_swap!" begin
 	m = Model(Ipopt.Optimizer)
 	JuMP.@variables m begin
 		x
@@ -147,7 +147,7 @@ end
 		@test is_fixed(x)
 		unfix(b)
 		@test !is_fixed(x)
-		SquareModels._endo_exo!(b, x_exo, x, "")
+		SquareModels._endo_exo_swap!(b, x_exo, x, "")
 		fix.(b, 1)
 		@test !is_fixed(x)
 		@test is_fixed(x_exo)
@@ -160,7 +160,7 @@ end
 		@test all(is_fixed.(y))
 		unfix(b)
 		@test !any(is_fixed.(y))
-		SquareModels._endo_exo!(b, y_exo, y, "")
+		SquareModels._endo_exo_swap!(b, y_exo, y, "")
 		fix.(b, 1)
 		@test !any(is_fixed.(y))
 		@test all(is_fixed.(y_exo))
@@ -176,7 +176,7 @@ end
 			s[i ∈ 1:3, j ∈ 1:3; i != j], s[i, j] + s_exo[i, j] == 1
 		end
 
-		SquareModels._endo_exo!(b2, s_exo, s, "")
+		SquareModels._endo_exo_swap!(b2, s_exo, s, "")
 		fix.(b2, 1)
 		@test !any(is_fixed(s[i, j]) for (i, j) in keys(s.data))
 		@test all(is_fixed(s_exo[i, j]) for (i, j) in keys(s_exo.data))
@@ -189,7 +189,7 @@ end
 	end
 end
 
-@testset "@endo_exo!" begin
+@testset "@endo_exo_swap!" begin
 	m = Model(Ipopt.Optimizer)
 	JuMP.@variables m begin
 		x
@@ -205,7 +205,7 @@ end
 	end
 
 	@testset "x" begin
-		@endo_exo!(b, x_exo, x)
+		@endo_exo_swap!(b, x_exo, x)
 		fix.(b, 1)
 		@test !is_fixed(x)
 		@test is_fixed(x_exo)
@@ -213,7 +213,7 @@ end
 	end
 
 	@testset "y" begin
-		@endo_exo!(b, y_exo, y)
+		@endo_exo_swap!(b, y_exo, y)
 		fix.(b, 1)
 		@test !any(is_fixed.(y))
 		@test all(is_fixed.(y_exo))
@@ -227,7 +227,7 @@ end
 		y[i ∈ 1:5], y[i] + y_exo[i] == 1
 		end
 
-		@endo_exo! b begin
+		@endo_exo_swap! b begin
 		x_exo, x
 		y_exo, y
 		end
@@ -239,7 +239,7 @@ end
 	end
 end
 
-@testset "@endo_exo! error messages" begin
+@testset "@endo_exo_swap! error messages" begin
 	m = Model()
 	JuMP.@variables m begin
 		x
@@ -253,7 +253,7 @@ end
 
 	@testset "variable not in block" begin
 		err = try
-			@endo_exo!(b, z, y)
+			@endo_exo_swap!(b, z, y)
 			nothing
 		catch e
 			e
@@ -267,7 +267,7 @@ end
 		# w doesn't appear in any constraint in b
 		@variable(m, w)
 		err = try
-			@endo_exo!(b, w, x)
+			@endo_exo_swap!(b, w, x)
 			nothing
 		catch e
 			e
@@ -283,7 +283,7 @@ end
 		end
 		# Swapped args: trying to make x endogenous (but it already is) and y exogenous (but it's not endo)
 		err = try
-			@endo_exo!(b_swap, x, y)
+			@endo_exo_swap!(b_swap, x, y)
 			nothing
 		catch e
 			e
@@ -292,13 +292,13 @@ end
 		@test occursin("y is not endogenous", err.msg)
 		# Should suggest swap since x is endogenous and y appears in block
 		@test occursin("Did you swap the arguments?", err.msg)
-		@test occursin("@endo_exo!(block, y, x)", err.msg)
+		@test occursin("@endo_exo_swap!(block, y, x)", err.msg)
 	end
 
 	@testset "no swap suggestion when unhelpful" begin
 		# z is not in any constraint, so swapping wouldn't help
 		err = try
-			@endo_exo!(b, x, z)
+			@endo_exo_swap!(b, x, z)
 			nothing
 		catch e
 			e
@@ -318,7 +318,7 @@ end
 			a[i ∈ 1:3], a[i] == 1
 		end
 		err = try
-			@endo_exo!(b2, b, a)
+			@endo_exo_swap!(b2, b, a)
 			nothing
 		catch e
 			e
@@ -672,7 +672,7 @@ end
 			db = ModelDictionary(m)
 			db[GDP] = 100.0; db[C] = 100.0; db[I] = 50.0; db[G] = 30.0
 			db[m[:GDP_J]] = 0.0
-			@endo_exo!(b1, m[:GDP_J], GDP)
+			@endo_exo_swap!(b1, m[:GDP_J], GDP)
 			result = solve(b1, db)
 			@test result[m[:GDP_J]] ≈ 80 atol=1e-6
 		end
@@ -687,7 +687,7 @@ end
 			@test haskey(m, :a_J)
 			db = ModelDictionary(m)
 			db[a] = 4.0; db[m[:a_J]] = 0.0
-			@endo_exo!(b2, m[:a_J], a)
+			@endo_exo_swap!(b2, m[:a_J], a)
 			result = solve(b2, db)
 			@test result[m[:a_J]] ≈ 1 atol=1e-6
 		end
@@ -702,7 +702,7 @@ end
 			@test haskey(m, :b_J)
 			db = ModelDictionary(m)
 			db[b] .= 0.0; db[m[:b_J]] .= 0.0
-			@endo_exo!(b3, m[:b_J], b)
+			@endo_exo_swap!(b3, m[:b_J], b)
 			result = solve(b3, db)
 			@test all(result[m[:b_J][i]] ≈ 2 for i in 1:2)
 		end
@@ -717,7 +717,7 @@ end
 			@test haskey(m, :c_J)
 			db = ModelDictionary(m)
 			db[c] .= 0.0; db[m[:c_J]] .= 2.0
-			@endo_exo!(b4, m[:c_J], c)
+			@endo_exo_swap!(b4, m[:c_J], c)
 			result = solve(b4, db)
 			@test all(result[m[:c_J][i]] ≈ 2 for i in 1:2)
 		end
@@ -736,7 +736,7 @@ end
 			@test haskey(m, :GDP_J)
 			db = ModelDictionary(m)
 			db[GDP] = 100.0; db[C] = 100.0; db[I] = 50.0; db[m[:GDP_J]] = 0.0
-			@endo_exo!(b5, m[:GDP_J], GDP)
+			@endo_exo_swap!(b5, m[:GDP_J], GDP)
 			result = solve(b5, db)
 			@test result[m[:GDP_J]] ≈ 50 atol=1e-6
 		end
@@ -751,7 +751,7 @@ end
 			@test haskey(m, :x_J)
 			db = ModelDictionary(m)
 			db[x] .= [10.0, 20.0, 30.0]; db[m[:x_J]] .= 0.0
-			@endo_exo!(b6, m[:x_J][2:3], x[2:3])
+			@endo_exo_swap!(b6, m[:x_J][2:3], x[2:3])
 			result = solve(b6, db)
 			@test result[m[:x_J][2]] ≈ -9 atol=1e-6
 			@test result[m[:x_J][3]] ≈ -9 atol=1e-6
@@ -767,7 +767,7 @@ end
 			@test haskey(m, :x_J)
 			db = ModelDictionary(m)
 			db[x] .= [10.0 20.0 30.0; 40.0 50.0 60.0]; db[m[:x_J]] .= 0.0
-			@endo_exo!(b7, vec(m[:x_J][:, 2:3]), vec(x[:, 2:3]))
+			@endo_exo_swap!(b7, vec(m[:x_J][:, 2:3]), vec(x[:, 2:3]))
 			result = solve(b7, db)
 			@test result[m[:x_J][1, 2]] ≈ -9 atol=1e-6
 			@test result[m[:x_J][1, 3]] ≈ -9 atol=1e-6
@@ -885,7 +885,7 @@ end
 			db[s[i, d, t]] = 3.0
 		end
 		db[m[:s_J]] .= 0.0
-		@endo_exo!(b, m[:s_J], s)
+		@endo_exo_swap!(b, m[:s_J], s)
 		result = solve(b, db)
 		@test all(result[m[:s_J][i, d, t]] ≈ 2 for (i, d) in pairs for t in 1:2)
 	end
@@ -931,7 +931,7 @@ end
 			db[y[(i, d), t]] = 3.0
 		end
 		db[m[:y_J]] .= 0.0
-		@endo_exo!(b, m[:y_J], y)
+		@endo_exo_swap!(b, m[:y_J], y)
 		result = solve(b, db)
 		@test all(result[m[:y_J][(i, d), t]] ≈ 2 for (i, d) in pairs for t in 1:2)
 	end

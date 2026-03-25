@@ -222,7 +222,7 @@ end
 
     # Calibration: swap μ with Y[1]
     cal_block = copy(base_block)
-    @endo_exo! cal_block begin
+    @endo_exo_swap! cal_block begin
         μ, Y[1]
     end
 
@@ -289,7 +289,7 @@ end
     # x_value + x_J == 5 → after substitution, x_J == 5 - 1 = 4, still has a variable (x_J)
     # Instead, we need to create a truly trivial equation. Swap y out, z in:
     cal_block = copy(block)
-    @endo_exo! cal_block begin
+    @endo_exo_swap! cal_block begin
         z, y
     end
     # Now: eq1 is "x + x_J == 5" (x endo) — fine
@@ -323,7 +323,7 @@ end
     data[residuals(block)] .= 0.0
 
     cal_block = copy(block)
-    @endo_exo! cal_block begin
+    @endo_exo_swap! cal_block begin
         residuals(cal_block)[1], x
     end
     # Now eq1: "x_data + x_J == a * y" → x_J is endogenous, a and y are exogenous
@@ -351,7 +351,7 @@ end
 
     # Exogenize both p and q — their residuals become endo
     cal2 = copy(block2)
-    @endo_exo! cal2 begin
+    @endo_exo_swap! cal2 begin
         residuals(cal2)[1], p
         residuals(cal2)[2], q
     end

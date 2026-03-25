@@ -7,7 +7,7 @@ A JuMP extension for writing modular models with square systems of equations
 """
 module SquareModels
 
-export @block, Block, Equation, @endo_exo!, @variables, add_equation, add_equation!
+export @block, Block, Equation, @endo_exo_swap!, @variables, add_equation, add_equation!
 export endogenous, residuals, variables, exogenous, is_endogenous, overlaps, shared_endogenous
 export VariableRef  # Re-exported from JuMP for macro hygiene
 export ModelDictionary, fix, unfix, set_start_value, value, value_dict, add_missing_model_variables!
@@ -112,7 +112,7 @@ length(b)  # 4 (one scalar + three indexed)
 x ∈ b      # true
 ```
 
-See also: [`@block`](@ref), [`@endo_exo!`](@ref), [`endogenous`](@ref), [`variables`](@ref), [`solve`](@ref)
+See also: [`@block`](@ref), [`@endo_exo_swap!`](@ref), [`endogenous`](@ref), [`variables`](@ref), [`solve`](@ref)
 """
 struct Block
 	model::AbstractModel
@@ -780,7 +780,7 @@ b = @block model begin
 end
 ```
 
-See also: [`Block`](@ref), [`@endo_exo!`](@ref), [`constraints`](@ref), [`endogenous`](@ref), [`variables`](@ref)
+See also: [`Block`](@ref), [`@endo_exo_swap!`](@ref), [`constraints`](@ref), [`endogenous`](@ref), [`variables`](@ref)
 """
 macro block(model, expr)
 	line_number = expr.args[1]
@@ -912,7 +912,7 @@ unfix(b)          # Unfix all variables
 is_fixed(x)       # false
 ```
 
-See also: [`Block`](@ref), [`@endo_exo!`](@ref)
+See also: [`Block`](@ref), [`@endo_exo_swap!`](@ref)
 """
 function JuMP.unfix(b::Block)
 	for var in b
@@ -923,7 +923,7 @@ function JuMP.unfix(b::Block)
 	return nothing
 end
 
-include("endo_exo.jl")
+include("endo_exo_swap.jl")
 include("tagged_variables.jl")
 include("ModelDictionaries.jl")
 include("solve.jl")

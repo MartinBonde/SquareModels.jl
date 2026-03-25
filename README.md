@@ -7,7 +7,7 @@ Large-scale macroeconomic models are typically "square" — each equation determ
 
 - **Map constraints to endogenous variables** — Each constraint is explicitly paired with the variable it determines
 - **Build models modularly** — Define separate `Block`s of equations that can be combined
-- **Swap endogenous/exogenous variables** — Use `@endo_exo!` to change which variables are endogenous for calibration or counterfactual scenarios
+- **Swap endogenous/exogenous variables** — Use `@endo_exo_swap!` to change which variables are endogenous for calibration or counterfactual scenarios
 
 ## Quick Example
 
@@ -53,7 +53,7 @@ data[L] = [800, 200]
 
 # Calibration: swap observed values with parameters to be calibrated
 calibration = copy(model_block)
-@endo_exo! calibration begin
+@endo_exo_swap! calibration begin
     μ, L
     ρ, w
 end
@@ -103,7 +103,7 @@ module Production
 
     function define_calibration()
         block = define_equations()
-        @endo_exo! block begin
+        @endo_exo_swap! block begin
             A, Y  # Calibrate productivity to match output
         end
         block
@@ -165,11 +165,11 @@ full_model = consumers + production + government
 
 ### Endo-Exo Swapping
 
-During calibration, you often want to treat normally-endogenous variables as exogenous (data) and solve for parameters instead. The `@endo_exo!` macro swaps variable roles within a block:
+During calibration, you often want to treat normally-endogenous variables as exogenous (data) and solve for parameters instead. The `@endo_exo_swap!` macro swaps variable roles within a block:
 
 ```julia
 calibration_block = copy(base_block)
-@endo_exo! calibration_block begin
+@endo_exo_swap! calibration_block begin
   μ,  Y      # Solve for μ given Y (instead of Y given μ)
   δ,  K[t₁]  # Solve for δ given initial capital
 end
@@ -269,9 +269,9 @@ use_sparse_zero_array!(true)   # Re-enable (default)
 ```
 SquareModels/
 ├── src/
-│   ├── SquareModels.jl       # Main module: Block, @block, @endo_exo!
+│   ├── SquareModels.jl       # Main module: Block, @block, @endo_exo_swap!
 │   ├── SparseZeroArrays.jl   # Domain-aware sparse arrays with zero default
-│   ├── endo_exo.jl           # Endo-exo swap implementation
+│   ├── endo_exo_swap.jl      # Endo-exo swap implementation
 │   ├── ModelDictionaries.jl  # Variable-value mappings
 │   ├── solve.jl              # Solve functions
 │   ├── tagged_variables.jl   # @variables macro with tags/descriptions

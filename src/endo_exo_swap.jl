@@ -1,5 +1,5 @@
-"""Helper function for endo_exo! macro — single-pair swap (O(N) scan, no allocation)"""
-function _endo_exo!(block::Block, endo::AbstractVariableRef, exo::AbstractVariableRef, error_msg)
+"""Helper function for endo_exo_swap! macro — single-pair swap (O(N) scan, no allocation)"""
+function _endo_exo_swap!(block::Block, endo::AbstractVariableRef, exo::AbstractVariableRef, error_msg)
 	@assert isa(block, Block)
 
 	if !is_endogenous(exo, block)
@@ -12,7 +12,7 @@ function _endo_exo!(block::Block, endo::AbstractVariableRef, exo::AbstractVariab
 	    push!(error_parts, "  Endogenous variables in block ($(length(block.endogenous))): $block_vars_preview")
 
 	    if is_endogenous(endo, block) && exo ∈ block
-	        push!(error_parts, "  Did you swap the arguments? Try: @endo_exo!(block, $exo, $endo)")
+	        push!(error_parts, "  Did you swap the arguments? Try: @endo_exo_swap!(block, $exo, $endo)")
 	    end
 
 	    error(join(error_parts, "\n"))
@@ -28,8 +28,8 @@ function _endo_exo!(block::Block, endo::AbstractVariableRef, exo::AbstractVariab
 	push!(block._endogenous_set, endo)
 end
 
-"""Helper function for endo_exo! macro — batch swap with Dict-based O(1) lookup"""
-function _endo_exo!(block::Block, endos, exos, error_msg)
+"""Helper function for endo_exo_swap! macro — batch swap with Dict-based O(1) lookup"""
+function _endo_exo_swap!(block::Block, endos, exos, error_msg)
 	@assert isa(block, Block)
 
 	if length(endos) != length(exos)
@@ -54,7 +54,7 @@ function _endo_exo!(block::Block, endos, exos, error_msg)
 	        push!(error_parts, "  Endogenous variables in block ($(length(block.endogenous))): $block_vars_preview")
 
 	        if is_endogenous(endo, block) && exo ∈ block
-	            push!(error_parts, "  Did you swap the arguments? Try: @endo_exo!(block, $exo, $endo)")
+	            push!(error_parts, "  Did you swap the arguments? Try: @endo_exo_swap!(block, $exo, $endo)")
 	        end
 
 	        error(join(error_parts, "\n"))
@@ -77,29 +77,29 @@ end
 """
 Macro used to change which variables are matched to the constraints in a Block.
 Example:
-  @endo_exo!(my_block, MPC, C[t₁])
+  @endo_exo_swap!(my_block, MPC, C[t₁])
 """
-macro endo_exo!(block, endos, exos)
+macro endo_exo_swap!(block, endos, exos)
 	error_msg = string(:($endos => $exos))
 	esc(quote
-	    SquareModels._endo_exo!($block, $endos, $exos, $error_msg)
+	    SquareModels._endo_exo_swap!($block, $endos, $exos, $error_msg)
 	end)
 end
 
 """
 Macro used to change which variables are matched to the constraints in a Block.
 Example:
-  @endo_exo! my_block begin
+  @endo_exo_swap! my_block begin
 	    MPC, C[t₁]
 	    δ, K[t₁]
   end
 """
-macro endo_exo!(block, expr)
+macro endo_exo_swap!(block, expr)
 	@assert isa(expr.args[1], LineNumberNode)
 	code = Expr(:block)
 	for it in expr.args
 	    if !isa(it, LineNumberNode)
-	        call = :(SquareModels._endo_exo!($block, $(it.args[1]), $(it.args[2]), $it))
+	        call = :(SquareModels._endo_exo_swap!($block, $(it.args[1]), $(it.args[2]), $it))
 	        push!(code.args, call)
 	    end
 	end

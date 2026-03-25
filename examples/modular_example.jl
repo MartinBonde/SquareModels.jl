@@ -74,7 +74,7 @@ module Production
 
 	function define_calibration()
 		block = define_equations()
-		@endo_exo! block begin
+		@endo_exo_swap! block begin
 			A, Y[s, t₁]  # Calibrate productivity to match initial output
 			g, p[:manuf, t₁+1]  # Calibrate growth to match second period price
 		end
@@ -125,7 +125,7 @@ module HouseHolds
 
 	function define_calibration()
 		block = define_equations()
-		@endo_exo! block begin
+		@endo_exo_swap! block begin
 			α, C[s, t₁]  # Calibrate shares to match initial consumption
 		end
 		return block

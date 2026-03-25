@@ -62,7 +62,7 @@ end
 # ------------------------------------------------------------------------------
 # For calibration, swap observed values with parameters to be calibrated
 calibration = copy(model_block)
-@endo_exo! calibration begin
+@endo_exo_swap! calibration begin
 	μ, L
 	ρ, w
 end
