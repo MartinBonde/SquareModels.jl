@@ -191,6 +191,29 @@ Use `solve!` to update the data in-place:
 solve!(block, data)
 ```
 
+### ModelDictionary Indexing
+
+`ModelDictionary` supports indexing with JuMP variable containers, including slices with vectors or ranges. This eliminates the need for explicit loops over time periods or sets:
+
+```julia
+# Single value
+data[x[2025]]          # scalar
+
+# Vector of variable references — returns a Window (a view into the dictionary)
+data[x[2025:2060]]     # all periods
+data[x[[2025, 2030]]]  # selected periods
+
+# Multi-dimensional variables
+data[y[:electric, 2025:2060]]  # one fuel type, all periods
+data[y[:, 2025]]               # all fuel types, one period
+
+# Assignment works the same way
+data[x[2025:2060]] .= 1.0
+data[y[:electric, 2025:2060]] .= 0.8
+```
+
+The returned `Window` supports broadcasting (`.=`, `.*`, etc.) and iteration, but external libraries (e.g. Makie) may require `collect` or `Float64.()` to convert to a plain `Vector`.
+
 ### Variable Tags and Descriptions
 
 Variables can have descriptions and tags for documentation and programmatic grouping.
