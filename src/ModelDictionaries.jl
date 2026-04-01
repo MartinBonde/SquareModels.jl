@@ -303,7 +303,11 @@ end
 Base.show(io::IO, w::Window) = show(io, MIME"text/plain"(), w)
 
 Base.getindex(w::Window, index::AbstractArray) = length(index) == 1 ? getindex(w, index[]) : getindex.(Ref(w), index)
-Base.getindex(w::Window, indices...) = getindex.(Ref(w.data_view), w.indices[indices...])
+function Base.getindex(w::Window, indices...)
+	idx = w.indices[indices...]
+	idx isa Integer && return w.data_view[idx]
+	map(i -> w.data_view[i], Array(idx))
+end
 
 Base.setindex!(w::Window, value, index::AbstractArray) = setindex!.(Ref(w), value, index)
 Base.setindex!(w::Window, value, indices...) = setindex!.(Ref(w.data_view), value, w.indices[indices...])

@@ -124,6 +124,30 @@ end
 	@test length(b) == length(all_variables(model))
 end
 
+@testset "Window slicing returns plain Arrays" begin
+	b = ModelDictionary(model)
+	b[y] = [1, 2, 3, 4, 5]
+	b[z] = [i*j for j=1:5, i=1:3]
+
+	# 1D variable → Window, slice with colon → Vector
+	@test b[y][:] isa Vector
+	@test b[y][:] == [1, 2, 3, 4, 5]
+
+	# 2D variable → Window, fix one dim → Vector
+	@test b[z][1, :] isa Vector
+	@test b[z][1, :] == [1, 2, 3]
+	@test b[z][:, :a] isa Vector
+	@test b[z][:, :a] == [1, 2, 3, 4, 5]
+
+	# 2D variable → Window, slice both dims → Matrix
+	@test b[z][:, :] isa Matrix
+	@test size(b[z][:, :]) == (5, 3)
+
+	# Scalar indexing still returns a scalar
+	@test b[z][1, :a] isa Number
+	@test b[z][1, :a] == 1
+end
+
 @testset "Test fixing variables" begin
 	# Create new model, as we are changing model state
 	model = Model()
