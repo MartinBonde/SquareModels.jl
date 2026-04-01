@@ -265,6 +265,12 @@ end
 ```
 """
 function diagnose(block::Block, data::ModelDictionary)
+    for res in block.residuals
+        if !(res ∈ data) || data[res] === nothing
+            data[res] = 0.0
+        end
+    end
+
     endo_set = block._endogenous_set
     var_map = Dict{VariableRef, VariableRef}()
     for endo_var in block.endogenous
@@ -330,6 +336,12 @@ function _build_model(
     replace_nothing::Union{Nothing, Number} = nothing,
     skip_diagnostics::Bool = false
 )
+    for res in block.residuals
+        if !(res ∈ data) || data[res] === nothing
+            data[res] = 0.0
+        end
+    end
+
     solve_model = _copy_model_config(block.model)
     endo_set = block._endogenous_set
 
@@ -446,7 +458,6 @@ block = @block model begin
     x, x == 10
     y, y == 20
 end
-data[residuals(block)] .= 0.0
 
 solution = solve(block, data)
 solution[x]  # 10.0

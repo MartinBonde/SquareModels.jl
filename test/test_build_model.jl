@@ -618,4 +618,34 @@ end
     @test solution[y] ≈ 15.0 atol=1e-6
 end
 
+@testset "solve auto-initializes missing residuals" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.@variables model begin
+        x
+        y
+        z
+    end
+
+    # Block 1: calibration step producing a ModelDictionary
+    block1 = @block model begin
+        x, x == 10
+    end
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+    data[y] = 2.0
+    data[z] = 5.0
+    data[residuals(block1)] .= 0.0
+    calibrated = solve(block1, data)
+
+    # Block 2: uses variables from block1's result, but its residuals are missing from calibrated
+    block2 = @block model begin
+        y, y == z * 3
+    end
+
+    # This should work without manually setting residuals
+    solution = solve(block2, calibrated)
+    @test solution[y] ≈ 15.0 atol=1e-6
+end
+
 end # module
