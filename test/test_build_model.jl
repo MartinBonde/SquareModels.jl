@@ -618,6 +618,22 @@ end
     @test solution[y] ≈ 15.0 atol=1e-6
 end
 
+@testset "solve errors on failed solver status" begin
+    model = Model(Ipopt.Optimizer)
+    JuMP.set_silent(model)
+    JuMP.@variable(model, x >= 1)
+
+    data = ModelDictionary(model)
+    data[x] = 1.0
+
+    block = @block model begin
+        x, x == 0
+    end
+    data[residuals(block)] .= 0.0
+
+    @test_throws ErrorException solve(block, data)
+end
+
 @testset "solve auto-initializes missing residuals" begin
     model = Model(Ipopt.Optimizer)
     JuMP.@variables model begin
