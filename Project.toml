@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Martin Kirk Bonde <martin@bonde.dk>"]
 
 [deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Dictionaries = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
 GAMS = "1ca51c6a-1b4d-4546-9ae1-53e0a243ab12"
@@ -18,6 +19,7 @@ StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 GAMS = {url = "https://github.com/MartinBonde/gams.jl"}
 
 [compat]
+CSV = "0.10"
 DataFrames = "1"
 Dictionaries = "0.4"
 GAMS = "0.5"
@@ -30,7 +32,8 @@ StatsBase = "0.34"
 julia = "1.11"
 
 [extras]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["CSV", "Test"]

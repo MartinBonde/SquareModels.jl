@@ -4,6 +4,7 @@
 using Dictionaries
 using Parquet2
 using DataFrames
+using CSV
 import GAMS
 
 """
@@ -594,7 +595,7 @@ end
     load(path::AbstractString, model::AbstractModel; renames...) → ModelDictionary
     load(path::AbstractString, model::AbstractModel, renames::Pair...) → ModelDictionary
 
-Load a ModelDictionary from a Parquet or GDX file.
+Load a ModelDictionary from a Parquet, CSV, or GDX file.
 
 Iterates over all variables in the model and looks up their values in the data file.
 Variables not found in the file will have `nothing` values.
@@ -602,11 +603,13 @@ Variables not found in the file will have `nothing` values.
 For Parquet files, supports both the simple format (variable, indices, value) and Gekko's format
 (with id, name, dim1, dim2, period, value columns).
 
+CSV files use the simple format only.
+
 For GDX files, reads parameters and uses their values. Multi-dimensional parameters have
 their indices joined with commas.
 
 # Arguments
-- `path`: Path to the Parquet or GDX file
+- `path`: Path to the Parquet, CSV, or GDX file
 - `model`: The JuMP model to associate with the dictionary
 - `renames`: Optional name mappings to load variables from differently-named data. Can be passed as keyword arguments
   or as `Pair` arguments. For simple renames, use `ModelVar="GdxName"`. For slicing (extracting a subset of a
@@ -642,8 +645,11 @@ function load(path::AbstractString, model::AbstractModel, renames::Pair...; kwar
 	rename_dict, slice_dict = _build_rename_and_slice_dicts(renames, kwargs)
 
 	# Dispatch based on file extension
-	if endswith(lowercase(path), ".gdx")
+	ext = lowercase(path)
+	if endswith(ext, ".gdx")
 		return _load_gdx(path, model, rename_dict, slice_dict)
+	elseif endswith(ext, ".csv")
+		return _load_csv(path, model, rename_dict, slice_dict)
 	else
 		return _load_parquet(path, model, rename_dict, slice_dict)
 	end
@@ -701,25 +707,22 @@ function _load_gdx(path::AbstractString, model::AbstractModel, rename_dict::Dict
 	return d
 end
 
-"""Load from a Parquet file."""
-function _load_parquet(path::AbstractString, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
-	df = DataFrame(Parquet2.Dataset(path))
+"""Normalize a tabular cell to String, treating missing as empty."""
+_tab_str(x) = ismissing(x) ? "" : string(x)
 
-	# Detect format and convert to standard format if needed
-	if "variable" in names(df) && "indices" in names(df)
-		# Simple format - use directly
-		data_df = df[.!ismissing.(df.value), [:variable, :indices, :value]]
-	elseif "name" in names(df) && "id" in names(df)
-		# Gekko format - convert
-		data_df = _convert_gekko_format(df)
-	else
-		error("Unknown parquet format. Expected columns: (variable, indices, value) or Gekko format (id, name, dim1, dim2, period, value)")
-	end
+"""Extract rows in simple (variable, indices, value) format."""
+function _simple_format_df(df::DataFrame)
+	("variable" in names(df) && "indices" in names(df)) ||
+		error("Expected columns: (variable, indices, value)")
+	return df[.!ismissing.(df.value), [:variable, :indices, :value]]
+end
 
-	# Build index for O(1) lookup: (variable, indices) => value
+"""Load from a tabular DataFrame in simple (variable, indices, value) format."""
+function _load_tabular(df::DataFrame, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
 	data_index = Dict{Tuple{String, String}, Float64}()
-	for row in eachrow(data_df)
-		data_index[(row.variable, row.indices)] = row.value
+	for row in eachrow(df)
+		key = (_tab_str(row.variable), _tab_str(row.indices))
+		data_index[key] = row.value
 	end
 
 	d = ModelDictionary(model)
@@ -742,6 +745,24 @@ function _load_parquet(path::AbstractString, model::AbstractModel, rename_dict::
 		end
 	end
 	return d
+end
+
+"""Load from a Parquet file."""
+function _load_parquet(path::AbstractString, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
+	df = DataFrame(Parquet2.Dataset(path))
+	data_df = if "variable" in names(df) && "indices" in names(df)
+		_simple_format_df(df)
+	elseif "name" in names(df) && "id" in names(df)
+		_convert_gekko_format(df)
+	else
+		error("Unknown parquet format. Expected columns: (variable, indices, value) or Gekko format (id, name, dim1, dim2, period, value)")
+	end
+	return _load_tabular(data_df, model, rename_dict, slice_dict)
+end
+
+"""Load from a CSV file."""
+function _load_csv(path::AbstractString, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
+	return _load_tabular(_simple_format_df(CSV.read(path, DataFrame)), model, rename_dict, slice_dict)
 end
 
 

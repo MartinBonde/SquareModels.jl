@@ -6,6 +6,7 @@ using SquareModels
 using Dictionaries
 using Parquet2
 using DataFrames
+using CSV
 
 # GDX tests require the GAMS runtime - skip in CI
 const IN_CI = get(ENV, "CI", "false") == "true"
@@ -421,6 +422,27 @@ end
 
 	# Subset should still not have been expanded
 	@test length(subset) == 2
+end
+
+@testset "Test load from CSV" begin
+	mktempdir() do tmpdir
+		model = Model()
+		@variable(model, x)
+		@variable(model, y[1:2])
+
+		data = DataFrame(
+			variable = ["x", "y", "y"],
+			indices = ["", "1", "2"],
+			value = [1.5, 2.0, 3.0]
+		)
+		path = joinpath(tmpdir, "test.csv")
+		CSV.write(path, data)
+
+		d = load(path, model)
+		@test d[x] == 1.5
+		@test d[y[1]] == 2.0
+		@test d[y[2]] == 3.0
+	end
 end
 
 @testset "Test unload and load" begin
