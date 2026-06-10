@@ -5,7 +5,8 @@ using JuMP: @variable, @constraint, name
 using JuMP: set_start_value, fix, has_lower_bound, has_upper_bound
 using JuMP: lower_bound, upper_bound, set_lower_bound, set_upper_bound
 using JuMP: all_variables, is_fixed, value, add_to_expression!
-using JuMP: optimize!, set_silent, unsafe_backend, backend, set_time_limit_sec
+using JuMP: optimize!, assert_is_solved_and_feasible
+using JuMP: set_silent, unsafe_backend, backend, set_time_limit_sec
 import MathOptInterface as MOI
 
 # ============================================================================
@@ -515,6 +516,7 @@ function solve!(
 )
     model, var_map = _build_model(block, data; start_values, replace_nothing, skip_diagnostics)
     optimize!(model)
+    assert_is_solved_and_feasible(model)
 
     for (original_var, solve_var) in var_map
         data[original_var] = value(solve_var)
