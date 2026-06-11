@@ -766,10 +766,14 @@ end
 """Read a simple `(variable, indices, value)` file as a `SparseZeroArray` keyed by parsed indices."""
 read_sparse_array(path::AbstractString) = SparseZeroArray(_read_simple_keyed(path))
 
-"""Read values from a file aligned to a JuMP variable container's keys."""
-function read_variable(path::AbstractString, var)
+"""Read values from a file aligned to a JuMP variable container's keys.
+
+Returns an array with the same shape and key order as `var`. Missing entries
+use `default` (default `nothing`).
+"""
+function read_variable(path::AbstractString, var; default=nothing)
 	data = _read_simple_keyed(path)
-	return [get(data, key, nothing) for key in keys(var)]
+	return [get(data, _key_to_tuple(key), default) for key in keys(var)]
 end
 
 """Load from a DataFrame in simple (variable, indices, value) format."""

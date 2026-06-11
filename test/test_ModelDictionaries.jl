@@ -607,7 +607,10 @@ end
 			@test data[:a, 2024] == 1.0
 			@test data[:b, 2025] == SquareModels.Zero()
 
-			@test read_variable(data_path, x) == [get(keyed, key, nothing) for key in keys(x)]
+			@test read_variable(data_path, x) == [get(keyed, key.I, nothing) for key in keys(x)]
+			@test read_variable(data_path, x; default=0.0) == [get(keyed, key.I, 0.0) for key in keys(x)]
+			@test read_variable(data_path, x)[1, 1] == 1.0
+			@test read_variable(data_path, x; default=-1.0)[2, 2] == -1.0
 
 			index_data = read_sparse_array(set_path)
 			@test index_data isa SparseZeroArray
