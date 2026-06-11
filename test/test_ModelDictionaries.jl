@@ -576,16 +576,24 @@ end
 @testset "Test simple file readers" begin
 	model = Model()
 	@variable(model, x[[:a, :b], 2024:2025])
+	@variable(model, y[[:a, :b], 2024:2025])
 
 	mktempdir() do tmpdir
 		path = joinpath(tmpdir, "data.csv")
 		index_path = joinpath(tmpdir, "index.csv")
 		parquet_path = joinpath(tmpdir, "data.parquet")
 		index_parquet_path = joinpath(tmpdir, "index.parquet")
+		grouped_path = joinpath(tmpdir, "grouped.csv")
+		grouped_parquet_path = joinpath(tmpdir, "grouped.parquet")
 		data_df = DataFrame(
 			variable = ["x", "x", "x"],
 			indices = ["a,2024", "b,2024", "a,2025"],
 			value = [1.0, 2.0, 3.0],
+		)
+		grouped_df = DataFrame(
+			variable = ["x", "y", "x", "y"],
+			indices = ["a,2024", "a,2024", "b,2024", "b,2024"],
+			value = [1.0, 10.0, 2.0, 20.0],
 		)
 		index_df = DataFrame(
 			variable = ["i", "i"],
@@ -593,8 +601,10 @@ end
 			value = [1.0, 1.0],
 		)
 		CSV.write(path, data_df)
+		CSV.write(grouped_path, grouped_df)
 		CSV.write(index_path, index_df)
 		Parquet2.writefile(parquet_path, data_df)
+		Parquet2.writefile(grouped_parquet_path, grouped_df)
 		Parquet2.writefile(index_parquet_path, index_df)
 
 		keyed = Dict((:a, 2024) => 1.0, (:b, 2024) => 2.0, (:a, 2025) => 3.0)
@@ -615,6 +625,14 @@ end
 			index_data = read_sparse_array(set_path)
 			@test index_data isa SparseZeroArray
 			@test index_data[:a] == 1.0
+		end
+
+		for data_path in (grouped_path, grouped_parquet_path)
+			@test read_variable(data_path, x; default=0.0)[1, 1] == 1.0
+			@test read_variable(data_path, y; default=0.0)[1, 1] == 10.0
+			@test read_variable(data_path, y; default=0.0)[2, 1] == 20.0
+			@test read_sparse_array(data_path; variable="x")[:b, 2024] == 2.0
+			@test read_sparse_array(data_path, "y")[:b, 2024] == 20.0
 		end
 	end
 end

@@ -734,8 +734,11 @@ function _read_simple_df(path::AbstractString)
 	return _simple_format_df(df)
 end
 
-function _read_simple_keyed(path::AbstractString)
+function _read_simple_keyed(path::AbstractString; variable=nothing)
 	df = _read_simple_df(path)
+	if variable !== nothing
+		df = df[_tab_str.(df.variable) .== string(variable), :]
+	end
 	return Dict(_parse_index_tuple(_tab_str(row.indices)) => Float64(row.value) for row in eachrow(df))
 end
 
@@ -764,15 +767,16 @@ function read_indices(path::AbstractString)
 end
 
 """Read a simple `(variable, indices, value)` file as a `SparseZeroArray` keyed by parsed indices."""
-read_sparse_array(path::AbstractString) = SparseZeroArray(_read_simple_keyed(path))
+read_sparse_array(path::AbstractString; variable=nothing) = SparseZeroArray(_read_simple_keyed(path; variable))
+read_sparse_array(path::AbstractString, variable) = read_sparse_array(path; variable)
 
 """Read values from a file aligned to a JuMP variable container's keys.
 
 Returns an array with the same shape and key order as `var`. Missing entries
 use `default` (default `nothing`).
 """
-function read_variable(path::AbstractString, var; default=nothing)
-	data = _read_simple_keyed(path)
+function read_variable(path::AbstractString, var; default=nothing, variable=base_name(var))
+	data = _read_simple_keyed(path; variable)
 	return [get(data, _key_to_tuple(key), default) for key in keys(var)]
 end
 
