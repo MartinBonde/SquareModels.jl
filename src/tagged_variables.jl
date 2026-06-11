@@ -250,6 +250,15 @@ tagged(GrowthAdjusted)  # [:vGDP, :qGDP, ...]
 Note: If you need JuMP's original `@variables` macro, use `JuMP.@variables` explicitly.
 """
 macro variables(container_expr, block)
+    sm = @__MODULE__
+    jump_variable = GlobalRef(JuMP, Symbol("@variable"))
+    model_dictionary = GlobalRef(sm, :ModelDictionary)
+    sparse_zero_array = GlobalRef(sm, :SparseZeroArray)
+    sparse_axis_array = GlobalRef(sm, :SparseAxisArray)
+    use_sparse_zero_array = GlobalRef(sm, :_use_sparse_zero_array)
+    variable_metadata = GlobalRef(sm, :_variable_metadata)
+    variable_metadata_type = GlobalRef(sm, :VariableMetadata)
+
     # Parse block-level tags from container expression
     container, block_tag_exprs = _parse_block_tags(container_expr)
 
@@ -259,7 +268,11 @@ macro variables(container_expr, block)
     end
 
     code = Expr(:block)
-    model_expr = :($container isa ModelDictionary ? $container.model : $container)
+    model_expr = :(
+        ($container) isa $model_dictionary ?
+            ($container).model :
+            ($container)
+    )
     var_names = Symbol[]
 
     for line in block.args
@@ -277,13 +290,13 @@ macro variables(container_expr, block)
         # Generate @variable call, using SparseZeroArray container for filtered sparse variables
         if _has_filter_condition(var_def)
             container_expr = :(
-                SquareModels._use_sparse_zero_array[] ?
-                    SquareModels.SparseZeroArray :
-                    JuMP.Containers.SparseAxisArray
+                ($use_sparse_zero_array)[] ?
+                    $sparse_zero_array :
+                    $sparse_axis_array
             )
-            push!(code.args, :(JuMP.@variable($model_expr, $var_def, container = $container_expr)))
+            push!(code.args, Expr(:macrocall, jump_variable, __source__, model_expr, var_def, Expr(:kw, :container, container_expr)))
         else
-            push!(code.args, :(JuMP.@variable($model_expr, $var_def)))
+            push!(code.args, Expr(:macrocall, jump_variable, __source__, model_expr, var_def))
         end
 
         # Combine block-level and variable-level tags
@@ -293,13 +306,13 @@ macro variables(container_expr, block)
         if !isempty(all_tag_exprs) || !isempty(desc)
             tags_tuple = Expr(:tuple, all_tag_exprs...)
             push!(code.args, :(
-                SquareModels._variable_metadata[$(QuoteNode(var_name))] =
-                    SquareModels.VariableMetadata([$tags_tuple...], $desc)
+                ($variable_metadata)[$(QuoteNode(var_name))] =
+                    $variable_metadata_type([$tags_tuple...], $desc)
             ))
         else
             push!(code.args, :(
-                SquareModels._variable_metadata[$(QuoteNode(var_name))] =
-                    SquareModels.VariableMetadata()
+                ($variable_metadata)[$(QuoteNode(var_name))] =
+                    $variable_metadata_type()
             ))
         end
     end

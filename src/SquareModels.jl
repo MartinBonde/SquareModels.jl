@@ -693,37 +693,47 @@ _equality_to_diff(x) = x
 """Helper macro for Block macro - returns (endogenous, residuals, equations) where equations are vectors parallel to endogenous"""
 macro _block(container, ref_vars, constraint, extra...)
 	_error(str...) = JuMP._macro_error(:block, (container, ref_vars, constraint, extra...), __source__, str...)
+	sm = @__MODULE__
+	jump_expression = GlobalRef(JuMP, Symbol("@expression"))
+	get_model = GlobalRef(sm, :_get_model)
+	copy_variable_ref = GlobalRef(sm, :copy_variable)
+	equation_ref = GlobalRef(sm, :Equation)
+	all_keys_ref = GlobalRef(sm, :_all_keys)
+	index_var_ref = GlobalRef(sm, :_index_var)
+	equal_to_ref = GlobalRef(MOI, :EqualTo)
 	code = Expr(:block)
 	base_sym = _get_name(ref_vars)
 	residual_name = make_residual_name(base_sym)
 	residual_symbol = Symbol(residual_name)
 
-	model_expr = :(SquareModels._get_model($container))
+	model_expr = :($get_model($container))
 
-	push!(code.args, :(SquareModels.copy_variable($residual_name, $base_sym)))
+	push!(code.args, :($copy_variable_ref($residual_name, $base_sym)))
 
 	transformed_constraint = _substitute_with_residual(constraint, _substitution_target(ref_vars), model_expr, residual_symbol)
 	diff_expr = _equality_to_diff(transformed_constraint)
 
 	if isa(ref_vars, Symbol)
+		expression_call = Expr(:macrocall, jump_expression, __source__, :_m, diff_expr)
 		macrocall = quote
 			let _m = $model_expr
-				_func = JuMP.@expression(_m, $diff_expr)
+				_func = $expression_call
 				endo = $ref_vars
 				resid = _m[$(QuoteNode(residual_symbol))]
-				eqs = SquareModels.Equation[SquareModels.Equation(_func, SquareModels.MOI.EqualTo(0.0))]
+				eqs = $equation_ref[$equation_ref(_func, $equal_to_ref(0.0))]
 				([endo], [resid], eqs)
 			end
 		end
 	elseif isexpr(ref_vars, :ref)
 		indices = ref_vars.args[2:end]
+		expression_call = Expr(:macrocall, jump_expression, __source__, :_m, Expr(:vect, indices...), diff_expr)
 		macrocall = quote
 			let _m = $model_expr
-				_exprs = JuMP.@expression(_m, [$(indices...)], $diff_expr)
-				_ks = SquareModels._all_keys(_exprs)
-				endos = [SquareModels._index_var($base_sym, k) for k in _ks]
-				resids = [SquareModels._index_var(_m[$(QuoteNode(residual_symbol))], k) for k in _ks]
-				eqs = SquareModels.Equation[SquareModels.Equation(_exprs[k...], SquareModels.MOI.EqualTo(0.0)) for k in _ks]
+				_exprs = $expression_call
+				_ks = $all_keys_ref(_exprs)
+				endos = [$index_var_ref($base_sym, k) for k in _ks]
+				resids = [$index_var_ref(_m[$(QuoteNode(residual_symbol))], k) for k in _ks]
+				eqs = $equation_ref[$equation_ref(_exprs[k...], $equal_to_ref(0.0)) for k in _ks]
 				(endos, resids, eqs)
 			end
 		end
@@ -783,6 +793,12 @@ end
 See also: [`Block`](@ref), [`@endo_exo_swap!`](@ref), [`constraints`](@ref), [`endogenous`](@ref), [`variables`](@ref)
 """
 macro block(model, expr)
+	sm = @__MODULE__
+	block_macro_ref = GlobalRef(sm, Symbol("@_block"))
+	get_model_ref = GlobalRef(sm, :_get_model)
+	equation_ref = GlobalRef(sm, :Equation)
+	collect_variables_ref = GlobalRef(sm, :collect_variables!)
+	residuals_ref = GlobalRef(sm, :residuals)
 	line_number = expr.args[1]
 	@assert isa(line_number, LineNumberNode)
 	code = Expr(:tuple)
@@ -792,7 +808,7 @@ macro block(model, expr)
 	    elseif isexpr(it, :tuple) # line with commas
 	        macro_call = Expr(
 	            :macrocall,
-	            :(SquareModels.var"@_block"),
+	            block_macro_ref,
 	            line_number,
 	            model,
 	            it.args...,
@@ -802,21 +818,21 @@ macro block(model, expr)
 	end
 	quote
 	    _container = $(esc(model))
-	    _model = SquareModels._get_model(_container)
+	    _model = $get_model_ref(_container)
 	    results = [$code...]
 	    endogenous = Iterators.flatten([r[1] for r in results])
 	    residuals = Iterators.flatten([r[2] for r in results])
 	    eqs = Iterators.flatten([r[3] for r in results])
 	    endo_vec = VariableRef[endogenous...]
 	    res_vec = VariableRef[residuals...]
-	    eqs_vec = SquareModels.Equation[eqs...]
+	    eqs_vec = $equation_ref[eqs...]
 	    all_vars = Set{VariableRef}()
 	    for eq in eqs_vec
-	        SquareModels.collect_variables!(all_vars, eq)
+	        $collect_variables_ref(all_vars, eq)
 	    end
 	    _block = Block(_model, endo_vec, res_vec, all_vars, eqs_vec)
 	    if _container isa ModelDictionary
-	        _container[SquareModels.residuals(_block)] .= 0.0
+	        _container[$residuals_ref(_block)] .= 0.0
 	    end
 	    _block
 	end

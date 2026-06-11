@@ -6,6 +6,27 @@ using SquareModels
 using JuMP.Containers: DenseAxisArray, SparseAxisArray
 using Ipopt
 
+module NoJuMPImportBlockTest
+using Test
+using SquareModels: @variables, @block, is_endogenous
+
+function run(m)
+	@variables m begin
+		x
+		y[1:2]
+	end
+
+	b = @block m begin
+		x, x == 1
+		y[i ∈ 1:2], y[i] == i
+	end
+
+	@test length(b) == 3
+	@test is_endogenous(x, b)
+	@test all(is_endogenous(y[i], b) for i ∈ 1:2)
+end
+end
+
 @testset "copy_variable" begin
 	m = Model()
 	JuMP.@variables m begin
@@ -29,6 +50,10 @@ using Ipopt
 		@test J_s isa SparseAxisArray
 		@test length(J_s) == length(s)
 	end
+end
+
+@testset "@block works without importing JuMP" begin
+	NoJuMPImportBlockTest.run(Model())
 end
 
 @testset "@_block" begin

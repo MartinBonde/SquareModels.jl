@@ -3,6 +3,31 @@ using SquareModels
 import JuMP
 using JuMP: Model, all_variables, haskey
 
+module NoJuMPImportVariablesTest
+using Test
+using SquareModels: @variables, use_sparse_zero_array!, _use_sparse_zero_array
+
+function run(model, all_variables)
+    @variables model begin
+        x
+    end
+    @test length(all_variables(model)) == 1
+    @test haskey(model, :x)
+
+    previous_sparse_setting = _use_sparse_zero_array[]
+    try
+        use_sparse_zero_array!(false)
+        @variables model begin
+            y[i=1:3; i <= 2]
+        end
+        @test length(all_variables(model)) == 3
+        @test haskey(model, :y)
+    finally
+        use_sparse_zero_array!(previous_sparse_setting)
+    end
+end
+end
+
 @testset "Tagged Variables" begin
 
     @testset "Tag type" begin
@@ -28,6 +53,10 @@ using JuMP: Model, all_variables, haskey
         @test length(all_variables(model)) == 4  # 1 scalar + 3 indexed
         @test haskey(model, :x)
         @test haskey(model, :y)
+    end
+
+    @testset "@variables works without importing JuMP" begin
+        NoJuMPImportVariablesTest.run(Model(), all_variables)
     end
 
     @testset "Variables with tags (:: syntax)" begin

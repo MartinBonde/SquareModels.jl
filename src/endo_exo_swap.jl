@@ -81,8 +81,9 @@ Example:
 """
 macro endo_exo_swap!(block, endos, exos)
 	error_msg = string(:($endos => $exos))
+	swap_ref = GlobalRef(@__MODULE__, :_endo_exo_swap!)
 	esc(quote
-	    SquareModels._endo_exo_swap!($block, $endos, $exos, $error_msg)
+	    $swap_ref($block, $endos, $exos, $error_msg)
 	end)
 end
 
@@ -96,10 +97,11 @@ Example:
 """
 macro endo_exo_swap!(block, expr)
 	@assert isa(expr.args[1], LineNumberNode)
+	swap_ref = GlobalRef(@__MODULE__, :_endo_exo_swap!)
 	code = Expr(:block)
 	for it in expr.args
 	    if !isa(it, LineNumberNode)
-	        call = :(SquareModels._endo_exo_swap!($block, $(it.args[1]), $(it.args[2]), $it))
+	        call = :($swap_ref($block, $(it.args[1]), $(it.args[2]), $it))
 	        push!(code.args, call)
 	    end
 	end
