@@ -294,7 +294,7 @@ macro variables(container_expr, block)
                     $sparse_zero_array :
                     $sparse_axis_array
             )
-            push!(code.args, Expr(:macrocall, jump_variable, __source__, model_expr, var_def, Expr(:kw, :container, container_expr)))
+            push!(code.args, Expr(:macrocall, jump_variable, __source__, model_expr, var_def, Expr(:(=), :container, container_expr)))
         else
             push!(code.args, Expr(:macrocall, jump_variable, __source__, model_expr, var_def))
         end
