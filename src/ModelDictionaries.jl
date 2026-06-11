@@ -710,6 +710,17 @@ end
 """Normalize a tabular cell to String, treating missing as empty."""
 _tab_str(x) = ismissing(x) ? "" : string(x)
 
+const IndexValue = Union{Symbol, Int}
+
+"""Parse one index component from a comma-joined indices string."""
+_parse_index_part(s) = (i = tryparse(Int, s)) === nothing ? Symbol(s) : i
+
+"""Parse comma-joined indices from the simple (variable, indices, value) format."""
+function _parse_index_tuple(indices::AbstractString)
+	isempty(strip(indices)) && error("Empty indices string")
+	return Tuple(_parse_index_part(strip(s)) for s in split(indices, ","))
+end
+
 """Extract rows in simple (variable, indices, value) format."""
 function _simple_format_df(df::DataFrame)
 	("variable" in names(df) && "indices" in names(df)) ||
@@ -717,8 +728,52 @@ function _simple_format_df(df::DataFrame)
 	return df[.!ismissing.(df.value), [:variable, :indices, :value]]
 end
 
-"""Load from a tabular DataFrame in simple (variable, indices, value) format."""
-function _load_tabular(df::DataFrame, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
+function _read_simple_df(path::AbstractString)
+	ext = lowercase(path)
+	df = endswith(ext, ".csv") ? CSV.read(path, DataFrame) : DataFrame(Parquet2.Dataset(path))
+	return _simple_format_df(df)
+end
+
+function _read_simple_keyed(path::AbstractString)
+	df = _read_simple_df(path)
+	return Dict(_parse_index_tuple(_tab_str(row.indices)) => Float64(row.value) for row in eachrow(df))
+end
+
+"""
+Read index components from a simple `(variable, indices, value)` CSV or Parquet file.
+
+Returns a `Vector{Union{Symbol, Int}}` when every row has one index, otherwise an
+`n×d` `Matrix{Union{Symbol, Int}}` with one column per index dimension.
+"""
+function read_indices(path::AbstractString)
+	df = _read_simple_df(path)
+	isempty(df) && return IndexValue[]
+	parsed = [_parse_index_tuple(_tab_str(row.indices)) for row in eachrow(df)]
+	ndims = length(first(parsed))
+	for p in parsed
+		length(p) == ndims || error("Inconsistent number of indices across rows in $path")
+	end
+	if ndims == 1
+		return IndexValue[only(p) for p in parsed]
+	end
+	mat = Matrix{IndexValue}(undef, length(parsed), ndims)
+	for (i, p) in enumerate(parsed)
+		mat[i, :] = collect(p)
+	end
+	return mat
+end
+
+"""Read a simple `(variable, indices, value)` file as a `SparseZeroArray` keyed by parsed indices."""
+read_sparse_array(path::AbstractString) = SparseZeroArray(_read_simple_keyed(path))
+
+"""Read values from a file aligned to a JuMP variable container's keys."""
+function read_variable(path::AbstractString, var)
+	data = _read_simple_keyed(path)
+	return [get(data, key, nothing) for key in keys(var)]
+end
+
+"""Load from a DataFrame in simple (variable, indices, value) format."""
+function _load_simple(df::DataFrame, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
 	data_index = Dict{Tuple{String, String}, Float64}()
 	for row in eachrow(df)
 		key = (_tab_str(row.variable), _tab_str(row.indices))
@@ -757,12 +812,12 @@ function _load_parquet(path::AbstractString, model::AbstractModel, rename_dict::
 	else
 		error("Unknown parquet format. Expected columns: (variable, indices, value) or Gekko format (id, name, dim1, dim2, period, value)")
 	end
-	return _load_tabular(data_df, model, rename_dict, slice_dict)
+	return _load_simple(data_df, model, rename_dict, slice_dict)
 end
 
 """Load from a CSV file."""
 function _load_csv(path::AbstractString, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
-	return _load_tabular(_simple_format_df(CSV.read(path, DataFrame)), model, rename_dict, slice_dict)
+	return _load_simple(_simple_format_df(CSV.read(path, DataFrame)), model, rename_dict, slice_dict)
 end
 
 

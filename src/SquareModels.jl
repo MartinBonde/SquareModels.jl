@@ -12,7 +12,7 @@ export endogenous, residuals, variables, exogenous, is_endogenous, overlaps, sha
 export VariableRef  # Re-exported from JuMP for macro hygiene
 export ModelDictionary, fix, unfix, set_start_value, value, value_dict, add_missing_model_variables!
 export keys_match, assert_no_diff
-export unload, load
+export unload, load, read_indices, read_sparse_array, read_variable
 export RESIDUAL_SUFFIX
 export solve, solve!, diagnose
 export Tag, description, tags, has_tag, tagged, metadata

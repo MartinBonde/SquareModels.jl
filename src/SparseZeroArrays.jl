@@ -59,6 +59,11 @@ struct SparseZeroArray{T, N, KT} <: AbstractArray{T, N}
     domain::NTuple{N, Set}
 end
 
+function SparseZeroArray(data::AbstractDict)
+    saa = SparseAxisArray(data)
+    return SparseZeroArray(saa, _domain_from_keys(saa))
+end
+
 function Base.getindex(s::SparseZeroArray{T, N, KT}, args...) where {T, N, KT}
     if args isa KT  # scalar access — compile-time specialized
         for (arg, dom) in zip(args, s.domain)
@@ -162,6 +167,10 @@ use_sparse_zero_array!(enabled::Bool=true) = (_use_sparse_zero_array[] = enabled
 # ==============================================================================
 # JuMP custom container — create SparseZeroArray directly via @variable
 # ==============================================================================
+_domain_key(k::Tuple) = only(k)
+_domain_key(k) = k
+
+_domain_from_keys(saa::SparseAxisArray{T,1}) where {T} = (Set(_domain_key(k) for k in keys(saa.data)),)
 _domain_from_keys(saa::SparseAxisArray{T,N}) where {T,N} =
     ntuple(dim -> Set(k[dim] for k in keys(saa.data)), N)
 
