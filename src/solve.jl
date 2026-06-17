@@ -412,6 +412,44 @@ function _build_model(
 end
 
 # ============================================================================
+# GAMS listing annotation
+# ============================================================================
+
+"""Return the path to the `.lst` listing file written by `model`'s GAMS optimizer,
+or `nothing` if `model` is not solved through GAMS (or no listing exists yet)."""
+function _gams_lst_path(model)
+    backend = unsafe_backend(model)
+    backend isa GAMS.Optimizer || return nothing
+    work = backend.gamswork
+    work === nothing && return nothing
+    path = joinpath(work.working_dir, "moi.lst")
+    return isfile(path) ? path : nothing
+end
+
+"""
+    annotate_lst(block::Block, path; out_path=path)
+
+Rewrite a GAMS `.lst`/`.gms` file in place, replacing GAMS.jl's generated `x<i>`/`eq<i>`
+symbols with the JuMP names of `block`'s endogenous variables.
+
+GAMS.jl numbers variables (`x<i>`) and equations (`eq<i>`) by their 1-based add-order, which
+matches the order in which `solve`/`solve!` adds `block.endogenous`/`block.equations` to the
+intermediate model (equation `i` pins `endogenous[i]`). This makes the otherwise opaque GAMS
+listing readable for debugging. Returns `out_path`.
+"""
+function annotate_lst(block::Block, path::AbstractString; out_path::AbstractString=path)
+    names = name.(block.endogenous)
+    sub(line, prefix) = replace(line, Regex("\\b$prefix(\\d+)\\b") => m -> begin
+        i = parse(Int, m[length(prefix)+1:end])
+        1 <= i <= length(names) ? names[i] : m
+    end)
+    # The GAMS banner contains "x86 64bit", which would otherwise be mistaken for a variable.
+    lines = [occursin("WEX-WEI", l) ? l : sub(sub(l, "eq"), "x") for l in readlines(path)]
+    write(out_path, join(lines, "\n") * "\n")
+    return out_path
+end
+
+# ============================================================================
 # solve
 # ============================================================================
 
@@ -516,6 +554,10 @@ function solve!(
 )
     model, var_map = _build_model(block, data; start_values, replace_nothing, skip_diagnostics)
     optimize!(model)
+
+    lst = _gams_lst_path(model)
+    lst === nothing || annotate_lst(block, lst)
+
     assert_is_solved_and_feasible(model)
 
     for (original_var, solve_var) in var_map
