@@ -7,6 +7,7 @@ using JuMP: lower_bound, upper_bound, set_lower_bound, set_upper_bound
 using JuMP: all_variables, is_fixed, value, add_to_expression!
 using JuMP: optimize!, assert_is_solved_and_feasible
 using JuMP: set_silent, unsafe_backend, backend, set_time_limit_sec
+using JuMP: FEASIBILITY_SENSE, set_objective_sense, set_optimizer_attribute
 import MathOptInterface as MOI
 
 # ============================================================================
@@ -409,6 +410,43 @@ function _build_model(
     end
 
     return solve_model, var_map
+end
+
+# ============================================================================
+# GAMS model construction
+# ============================================================================
+
+"""
+    gams_cns_model(; system_dir, working_dir=mktempdir(), solver="CONOPT4") -> Model
+
+Construct a JuMP `Model` configured to solve a square nonlinear system as a GAMS
+constrained nonlinear system (CNS).
+
+The model is set to `FEASIBILITY_SENSE` (no objective) and wired to the given GAMS
+`solver`. The workspace is built directly so its listing (`moi.lst`) lands in
+`working_dir`, which lets `solve!`/`annotate_lst!` locate and annotate it afterwards.
+
+Solver-specific tuning (e.g. CONOPT options) is left to the caller via
+`set_optimizer_attribute` on the returned model.
+
+# Arguments
+- `system_dir`: Path to the GAMS system directory (the folder containing `gams.exe`).
+- `working_dir`: Directory for GAMS scratch files and the `moi.lst` listing.
+- `solver`: GAMS CNS solver name (default `"CONOPT4"`).
+"""
+function gams_cns_model(; system_dir::AbstractString, working_dir::AbstractString=mktempdir(), solver::AbstractString="CONOPT4")
+    isdir(system_dir) || error("GAMS system directory not found: $system_dir")
+    mkpath(working_dir)
+    # GAMS.jl's optimize! swaps the args of GAMSWorkspace(working_dir, system_dir),
+    # so build the workspace here (correct order) instead of setting SysDir/WorkDir attributes.
+    workspace = GAMS.GAMSWorkspace(working_dir, system_dir)
+    model = Model(() -> GAMS.Optimizer(workspace))
+    set_objective_sense(model, FEASIBILITY_SENSE)
+    set_optimizer_attribute(model, GAMS.ModelType(), "CNS")
+    set_optimizer_attribute(model, "CNS", solver)
+    set_optimizer_attribute(model, GAMS.Solver(), solver)
+    set_optimizer_attribute(model, "lmmxsf", 1)
+    return model
 end
 
 # ============================================================================
