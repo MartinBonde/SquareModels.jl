@@ -2,14 +2,16 @@ module TestGAMS
 
 using Test
 import JuMP
-using JuMP: Model, set_optimizer_attribute, get_optimizer_attribute, @variable, unsafe_backend
+using JuMP: Model, set_optimizer_attribute, get_optimizer_attribute, @variable, unsafe_backend, MOI
 using SquareModels
 import GAMS
-import MathOptInterface as MOI
+
+const GAMS_SYSDIR = "C:/GAMS/53"
 
 # Probe whether the GAMS runtime (not just the Julia package) is installed
 const GAMS_AVAILABLE = try
     m = Model(GAMS.Optimizer)
+    set_optimizer_attribute(m, "sysdir", GAMS_SYSDIR)
     @variable(m, _x)
     JuMP.@constraint(m, _x == 1)
     JuMP.optimize!(m)
@@ -22,6 +24,7 @@ if GAMS_AVAILABLE
 
 @testset "GAMS CONOPT solve" begin
     m = Model(GAMS.Optimizer)
+    set_optimizer_attribute(m, "sysdir", GAMS_SYSDIR)
     set_optimizer_attribute(m, "NLP", "CONOPT")
     set_optimizer_attribute(m, "LogOption", 0)
 
@@ -52,6 +55,54 @@ if GAMS_AVAILABLE
 
     @test solution[x] ≈ 10.0 atol=1e-6
     @test solution[y] ≈ 25.0 atol=1e-6
+end
+
+@testset "annotate_lst! on real GAMS listing" begin
+    # GAMS.jl suppresses the symbol listing ($offlisting, limrow/limcol/solprint=0), so a
+    # clean solve never names x<i>/eq<i> in the .lst. CONOPT *does* name them when the square
+    # system is singular ("ERRORS/WARNINGS IN EQUATION/VARIABLE"), which is exactly the case
+    # annotate_lst! exists to make readable. Two linearly dependent equations force that.
+    #
+    # The working dir is pinned via an explicit workspace so we can read the .lst after the
+    # solve (GAMS.jl swaps the args when both "sysdir" and "workdir" attributes are set).
+    dir = mktempdir()
+    m = Model(() -> GAMS.Optimizer(GAMS.GAMSWorkspace(dir, GAMS_SYSDIR)))
+    set_optimizer_attribute(m, GAMS.ModelType(), "CNS")
+    set_optimizer_attribute(m, "CNS", "CONOPT")
+    set_optimizer_attribute(m, GAMS.Solver(), "CONOPT")
+
+    JuMP.@variables m begin
+        foo
+        bar
+    end
+
+    data = ModelDictionary(m)
+    data[foo] = 1.0
+    data[bar] = 1.0
+
+    block = @block m begin
+        foo, foo + bar == 2
+        bar, 2foo + 2bar == 4
+    end
+    data[residuals(block)] .= 0.0
+
+    # A singular system may or may not be reported as a solver failure; either way solve!
+    # annotates the .lst before that decision, which is what we are checking here.
+    try
+        solve(block, data)
+    catch
+    end
+
+    lst = joinpath(dir, "moi.lst")
+    @test isfile(lst)
+
+    content = read(lst, String)
+    # GAMS only ever writes x<i>/eq<i>, so the JuMP names appearing in the singularity
+    # diagnostics is definitive proof solve! rewrote (annotated) the listing.
+    @test occursin("EQUATION foo", content)
+    @test occursin("VARIABLE foo", content)
+    @test !occursin(r"\bx1\b", content)
+    @test !occursin(r"\beq1\b", content)
 end
 
 else
