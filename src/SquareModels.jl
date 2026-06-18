@@ -17,6 +17,7 @@ export RESIDUAL_SUFFIX
 export solve, solve!, diagnose, annotate_lst!, gams_cns_model
 export Tag, description, tags, has_tag, tagged, metadata
 export SparseZeroArray, ∑, use_sparse_zero_array!
+export ModelPlotting
 
 RESIDUAL_SUFFIX = "_J"  # Suffix for residual variables (J for "junk" or adjustment)
 
@@ -943,6 +944,7 @@ include("endo_exo_swap.jl")
 include("tagged_variables.jl")
 include("ModelDictionaries.jl")
 include("solve.jl")
+include("ModelPlotting.jl")
 
 # Define _get_model for ModelDictionary (after ModelDictionaries.jl is included)
 _get_model(md::ModelDictionary) = md.model

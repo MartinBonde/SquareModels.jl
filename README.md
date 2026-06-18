@@ -212,7 +212,35 @@ data[x[2025:2060]] .= 1.0
 data[y[:electric, 2025:2060]] .= 0.8
 ```
 
-The returned `Window` supports broadcasting (`.=`, `.*`, etc.) and iteration, but external libraries (e.g. Makie) may require `collect` or `Float64.()` to convert to a plain `Vector`.
+The returned `Window` supports broadcasting (`.=`, `.*`, etc.) and iteration, but external libraries (e.g. Makie) may require `collect` or `Float64.()` to convert to a plain `Vector`. The `ModelPlotting` submodule (below) handles this conversion for you.
+
+### Plotting
+
+The `ModelPlotting` submodule plots `ModelDictionary` slices directly with [Makie](https://docs.makie.org), handling the `Window` → numeric conversion, axis labels (e.g. years parsed from the variable index), and legend labels (from the variable name and its registered description).
+
+Plotting is provided through a package extension, so `CairoMakie` is an optional dependency. The plotting functions are only defined once `CairoMakie` is loaded — add it to your own project and `using CairoMakie` before calling them:
+
+```julia
+using CairoMakie               # loads the plotting extension (renders headlessly)
+using SquareModels.ModelPlotting
+
+# Plot a single time series — axis labels and title come from the variable's
+# index and registered description.
+fig = plot_variable(data, vGDP[2020:2060]; ylabel="Million EUR")
+save_figure(fig, "gdp.png")  # format inferred from extension (.png/.svg/.pdf)
+
+# Compose several series on one axis
+fig = Figure()
+ax = Axis(fig[1, 1]; xlabel="Year", ylabel="Real index")
+plot_series!(ax, data, qGDP[2020:2060])
+plot_series!(ax, data, qC[2020:2060])
+axislegend(ax)
+
+# Extract raw (x, y) vectors for custom plots
+x, y = series(data, vGDP[2020:2060])
+```
+
+`CairoMakie` renders headlessly (no display required), so this works for generating report figures in scripts or CI.
 
 ### Variable Tags and Descriptions
 
@@ -298,7 +326,11 @@ SquareModels/
 │   ├── ModelDictionaries.jl  # Variable-value mappings
 │   ├── solve.jl              # Solve functions
 │   ├── tagged_variables.jl   # @variables macro with tags/descriptions
+│   ├── ModelPlotting.jl      # Plotting interface (functions defined by extension)
 │   └── utils.jl              # Helper functions
+├── ext/
+│   ├── SquareModelsCairoMakieExt.jl # Plotting via CairoMakie (optional dep)
+│   └── SquareModelsGAMSExt.jl       # GAMS/GDX support (optional dep)
 ├── examples/
 │   ├── quick_example.jl      # Simple labor market model
 │   ├── modular_example.jl    # Modular CGE model example

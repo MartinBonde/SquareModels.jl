@@ -434,19 +434,10 @@ Solver-specific tuning (e.g. CONOPT options) is left to the caller via
 - `working_dir`: Directory for GAMS scratch files and the `moi.lst` listing.
 - `solver`: GAMS CNS solver name (default `"CONOPT4"`).
 """
-function gams_cns_model(; system_dir::AbstractString, working_dir::AbstractString=mktempdir(), solver::AbstractString="CONOPT4")
-    isdir(system_dir) || error("GAMS system directory not found: $system_dir")
-    mkpath(working_dir)
-    # GAMS.jl's optimize! swaps the args of GAMSWorkspace(working_dir, system_dir),
-    # so build the workspace here (correct order) instead of setting SysDir/WorkDir attributes.
-    workspace = GAMS.GAMSWorkspace(working_dir, system_dir)
-    model = Model(() -> GAMS.Optimizer(workspace))
-    set_objective_sense(model, FEASIBILITY_SENSE)
-    set_optimizer_attribute(model, GAMS.ModelType(), "CNS")
-    set_optimizer_attribute(model, "CNS", solver)
-    set_optimizer_attribute(model, GAMS.Solver(), solver)
-    set_optimizer_attribute(model, "lmmxsf", 1)
-    return model
+function gams_cns_model(; kwargs...)
+    ext = Base.get_extension(@__MODULE__, :SquareModelsGAMSExt)
+    ext === nothing && error("`gams_cns_model` requires the GAMS package — run `using GAMS` first.")
+    return ext._gams_cns_model(; kwargs...)
 end
 
 # ============================================================================
@@ -456,12 +447,8 @@ end
 """Return the path to the `.lst` listing file written by `model`'s GAMS optimizer,
 or `nothing` if `model` is not solved through GAMS (or no listing exists yet)."""
 function _gams_lst_path(model)
-    backend = unsafe_backend(model)
-    backend isa GAMS.Optimizer || return nothing
-    work = backend.gamswork
-    work === nothing && return nothing
-    path = joinpath(work.working_dir, "moi.lst")
-    return isfile(path) ? path : nothing
+    ext = Base.get_extension(@__MODULE__, :SquareModelsGAMSExt)
+    ext === nothing ? nothing : ext._gams_lst_path(model)
 end
 
 """
