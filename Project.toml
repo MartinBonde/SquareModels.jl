@@ -1,6 +1,6 @@
 name = "SquareModels"
 uuid = "8f61fe60-8cc6-11ec-3043-2171a73045bd"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Martin Kirk Bonde <martin@bonde.dk>"]
 
 [deps]
@@ -15,17 +15,21 @@ Parquet2 = "98572fba-bba0-415d-956f-fa77e587d26d"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
 [weakdeps]
+CONOPT = "d9ad0738-0ae8-416d-b8ee-a56302d35586"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 GAMS = "1ca51c6a-1b4d-4546-9ae1-53e0a243ab12"
 
 [extensions]
+SquareModelsCONOPTExt = "CONOPT"
 SquareModelsCairoMakieExt = "CairoMakie"
 SquareModelsGAMSExt = "GAMS"
 
 [sources]
+CONOPT = {url = "https://github.com/GAMS-dev/CONOPT.jl"}
 GAMS = {url = "https://github.com/MartinBonde/gams.jl"}
 
 [compat]
+CONOPT = "0.1"
 CairoMakie = "0.15"
 CSV = "0.10"
 DataFrames = "1"
@@ -40,6 +44,7 @@ StatsBase = "0.34"
 julia = "1.11"
 
 [extras]
+CONOPT = "d9ad0738-0ae8-416d-b8ee-a56302d35586"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 GAMS = "1ca51c6a-1b4d-4546-9ae1-53e0a243ab12"

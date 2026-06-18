@@ -8,6 +8,7 @@ using JuMP: all_variables, is_fixed, value, add_to_expression!
 using JuMP: optimize!, assert_is_solved_and_feasible
 using JuMP: set_silent, unsafe_backend, backend, set_time_limit_sec
 using JuMP: FEASIBILITY_SENSE, set_objective_sense, set_optimizer_attribute
+import Ipopt
 import MathOptInterface as MOI
 
 # ============================================================================
@@ -438,6 +439,44 @@ function gams_cns_model(; kwargs...)
     ext = Base.get_extension(@__MODULE__, :SquareModelsGAMSExt)
     ext === nothing && error("`gams_cns_model` requires the GAMS package — run `using GAMS` first.")
     return ext._gams_cns_model(; kwargs...)
+end
+
+# ============================================================================
+# Native solver model construction
+# ============================================================================
+
+"""
+    ipopt_model(; options...) -> Model
+
+Construct a JuMP `Model` backed by `Ipopt` and configured as a square nonlinear
+system (`FEASIBILITY_SENSE`, no objective).
+
+Extra keyword arguments are forwarded to the solver as optimizer attributes, e.g.
+`ipopt_model(tol = 1e-10)`.
+"""
+function ipopt_model(; options...)
+    model = Model(Ipopt.Optimizer)
+    set_objective_sense(model, FEASIBILITY_SENSE)
+    for (key, value) in options
+        set_optimizer_attribute(model, string(key), value)
+    end
+    return model
+end
+
+"""
+    conopt_model(; options...) -> Model
+
+Construct a JuMP `Model` backed by `CONOPT` and configured as a square nonlinear
+system (`FEASIBILITY_SENSE`, no objective). The `lmmxsf = 1` option is applied by
+default; pass extra keyword arguments to set additional CONOPT options (or override
+the default), e.g. `conopt_model(rtredg = 1e-12)`.
+
+Requires the optional `CONOPT` package — run `using CONOPT` first.
+"""
+function conopt_model(; kwargs...)
+    ext = Base.get_extension(@__MODULE__, :SquareModelsCONOPTExt)
+    ext === nothing && error("`conopt_model` requires the CONOPT package — run `using CONOPT` first.")
+    return ext._conopt_model(; kwargs...)
 end
 
 # ============================================================================
