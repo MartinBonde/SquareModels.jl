@@ -58,4 +58,53 @@ else
     @warn "Skipping GAMS tests: GAMS runtime not available"
 end
 
+# Pure string rewriting: no GAMS runtime required, so run unconditionally.
+@testset "annotate_lst!" begin
+    # Greek names are valid JuMP identifiers but not valid GAMS symbols, so the
+    # annotated output uses names GAMS itself could never have produced.
+    m = Model()
+    JuMP.@variables m begin
+        α
+        β
+    end
+
+    block = @block m begin
+        α, α == 1
+        β, β == 2
+    end
+
+    content = join([
+        "GAMS Rev 24.5 WEX-WEI x86 64bit/MS Windows",  # banner: x86 must survive
+        "---- VAR x1",
+        "---- VAR x2",
+        "---- EQU eq1",
+        "---- EQU eq2",
+        "out of range x99 eq50",                        # indices > #vars: unchanged
+        "boundary xx1 ax1 x1x",                         # not whole tokens: unchanged
+    ], "\n")
+
+    dir = mktempdir()
+    src = joinpath(dir, "moi.lst")
+    write(src, content)
+
+    out = annotate_lst!(block, src)
+    @test out == src
+    lines = readlines(src)
+
+    @test occursin("WEX-WEI", lines[1]) && occursin("x86", lines[1])  # banner skipped
+    @test lines[2] == "---- VAR α"
+    @test lines[3] == "---- VAR β"
+    @test lines[4] == "---- EQU α"
+    @test lines[5] == "---- EQU β"
+    @test lines[6] == "out of range x99 eq50"
+    @test lines[7] == "boundary xx1 ax1 x1x"
+
+    # out_path leaves the source untouched
+    dst = joinpath(dir, "annotated.lst")
+    write(src, content)
+    annotate_lst!(block, src; out_path=dst)
+    @test occursin("x1", readlines(src)[2])
+    @test readlines(dst)[2] == "---- VAR α"
+end
+
 end # module

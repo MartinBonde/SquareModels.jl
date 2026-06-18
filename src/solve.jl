@@ -427,7 +427,7 @@ function _gams_lst_path(model)
 end
 
 """
-    annotate_lst(block::Block, path; out_path=path)
+    annotate_lst!(block::Block, path; out_path=path)
 
 Rewrite a GAMS `.lst`/`.gms` file in place, replacing GAMS.jl's generated `x<i>`/`eq<i>`
 symbols with the JuMP names of `block`'s endogenous variables.
@@ -435,16 +435,22 @@ symbols with the JuMP names of `block`'s endogenous variables.
 GAMS.jl numbers variables (`x<i>`) and equations (`eq<i>`) by their 1-based add-order, which
 matches the order in which `solve`/`solve!` adds `block.endogenous`/`block.equations` to the
 intermediate model (equation `i` pins `endogenous[i]`). This makes the otherwise opaque GAMS
-listing readable for debugging. Returns `out_path`.
+listing readable for debugging.
+
+By default `out_path == path`, so the file is overwritten in place; pass `out_path` to write
+elsewhere. The file is rewritten with `\\n` line endings. Returns `out_path`.
 """
-function annotate_lst(block::Block, path::AbstractString; out_path::AbstractString=path)
+function annotate_lst!(block::Block, path::AbstractString; out_path::AbstractString=path)
     names = name.(block.endogenous)
-    sub(line, prefix) = replace(line, Regex("\\b$prefix(\\d+)\\b") => m -> begin
-        i = parse(Int, m[length(prefix)+1:end])
+    rx = r"\b(x|eq)(\d+)\b"
+    function rename(m::AbstractString)
+        i = parse(Int, m[(startswith(m, "eq") ? 3 : 2):end])
         1 <= i <= length(names) ? names[i] : m
-    end)
-    # The GAMS banner contains "x86 64bit", which would otherwise be mistaken for a variable.
-    lines = [occursin("WEX-WEI", l) ? l : sub(sub(l, "eq"), "x") for l in readlines(path)]
+    end
+    # Heuristic, not a guarantee: `\bx\d+\b` also matches tokens like "x86" in the GAMS
+    # banner ("WEX-WEI ... x86 64bit"), so skip that line. Out-of-range indices elsewhere
+    # fall through unchanged, but a coincidental in-range `x<i>` would be mis-renamed.
+    lines = [occursin("WEX-WEI", l) ? l : replace(l, rx => rename) for l in readlines(path)]
     write(out_path, join(lines, "\n") * "\n")
     return out_path
 end
@@ -556,7 +562,7 @@ function solve!(
     optimize!(model)
 
     lst = _gams_lst_path(model)
-    lst === nothing || annotate_lst(block, lst)
+    lst === nothing || annotate_lst!(block, lst)
 
     assert_is_solved_and_feasible(model)
 
