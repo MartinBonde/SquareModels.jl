@@ -18,7 +18,7 @@ export RESIDUAL_SUFFIX
 export solve, solve!, diagnose, annotate_lst!, gams_cns_model, conopt_model, ipopt_model
 export Tag, description, tags, has_tag, tagged, metadata
 export SparseZeroArray, ∑, use_sparse_zero_array!
-export ModelPlotting
+export ModelPlotting, @plot, plotvar, plotseries, labeled, LabeledSeries, AbstractSeries
 
 RESIDUAL_SUFFIX = "_J"  # Suffix for residual variables (J for "junk" or adjustment)
 
@@ -39,6 +39,18 @@ const _name_lookup_cache = WeakKeyDict{AbstractModel, Dict{String, VariableRef}}
 include("errors.jl")
 include("utils.jl")
 include("SparseZeroArrays.jl")
+
+"""
+    AbstractSeries
+
+Supertype for labelled, plottable data series. Concrete subtypes — `Window`
+(a view onto model data) and `LabeledSeries` (a single eager, computed line) —
+implement `ModelPlotting.expand(s) -> Vector{LabeledSeries}`, which splits the data
+into one labelled line per leading-index combination (the last dimension is the
+x-axis, e.g. `y[region, year]` becomes one line per region over the years).
+Dispatch on `AbstractSeries` to write plotting code that accepts either.
+"""
+abstract type AbstractSeries end
 
 """
     Equation
@@ -947,6 +959,7 @@ include("tagged_variables.jl")
 include("ModelDictionaries.jl")
 include("solve.jl")
 include("ModelPlotting.jl")
+using .ModelPlotting: @plot, plotvar, plotseries, labeled, LabeledSeries
 
 # Define _get_model for ModelDictionary (after ModelDictionaries.jl is included)
 _get_model(md::ModelDictionary) = md.model

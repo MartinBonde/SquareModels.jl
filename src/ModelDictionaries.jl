@@ -233,7 +233,7 @@ w[2] = 25    # Modify through the window
 d[y[2]]      # 25
 ```
 """
-struct Window{T, S}
+struct Window{T, S} <: AbstractSeries
 	data_view::T
 	indices::S
 	varname::Union{Nothing, AbstractString}

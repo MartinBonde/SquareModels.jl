@@ -216,28 +216,32 @@ The returned `Window` supports broadcasting (`.=`, `.*`, etc.) and iteration, bu
 
 ### Plotting
 
-The `ModelPlotting` submodule plots `ModelDictionary` slices directly with [Makie](https://docs.makie.org), handling the `Window` → numeric conversion, axis labels (e.g. years parsed from the variable index), and legend labels (from the variable name and its registered description).
+Plotting is delegated to [Makie](https://docs.makie.org): the package extension teaches Makie how to turn an `AbstractSeries` (a `Window` or a `LabeledSeries`) into x/y data via `Makie.convert_arguments`, so all the usual Makie verbs accept model data directly. It handles the `Window` → numeric conversion, axis labels (e.g. years parsed from the variable index), and legend labels (the variable name). A multi-dimensional variable fans out into one line per leading-index combination — the last dimension is the x-axis, so `y[region, year]` plots one line per region over the years.
 
-Plotting is provided through a package extension, so `CairoMakie` is an optional dependency. The plotting functions are only defined once `CairoMakie` is loaded — add it to your own project and `using CairoMakie` before calling them:
+The extension loads once any Makie backend is present, so `Makie`/`CairoMakie` is an optional dependency — add a backend to your own project and load it before plotting:
 
 ```julia
-using CairoMakie               # loads the plotting extension (renders headlessly)
-using SquareModels.ModelPlotting
+using CairoMakie               # loads any Makie backend → loads the extension (headless)
+using SquareModels
 
-# Plot a single time series — axis labels and title come from the variable's
-# index and registered description.
-fig = plot_variable(data, vGDP[2020:2060]; ylabel="Million EUR")
-save_figure(fig, "gdp.png")  # format inferred from extension (.png/.svg/.pdf)
+# Any Makie verb works on a slice — convert_arguments does the rest:
+lines(data.qGDP)
+scatter!(data.qC[2020:2060])
 
-# Compose several series on one axis
-fig = Figure()
-ax = Axis(fig[1, 1]; xlabel="Year", ylabel="Real index")
-plot_series!(ax, data, qGDP[2020:2060])
-plot_series!(ax, data, qC[2020:2060])
-axislegend(ax)
+# Batteries-included single figure (title and legend default to the variable name):
+fig = plotvar(data, vGDP[2020:2060]; ylabel="Million EUR")
+save("gdp.png", fig)           # Makie's save; format inferred from extension
 
-# Extract raw (x, y) vectors for custom plots
-x, y = series(data, vGDP[2020:2060])
+# Plot expressions of variables; each series is labelled with its source text.
+# Bare names resolve against `data`; arithmetic is applied elementwise.
+@plot data qGDP / qGDP[2019]
+@plot data [qGDP * pGDP, qGDP / qGDP[2019]]
+
+# Multi-dimensional variables fan out into one line per leading index:
+@plot data emissions          # emissions[region, year] → one line per region
+
+# Programmatic construction without the macro — build LabeledSeries explicitly:
+plotseries([labeled(data[v] .* data.pGDP, "$v * pGDP") for v in (:qGDP, :qC)])
 ```
 
 `CairoMakie` renders headlessly (no display required), so this works for generating report figures in scripts or CI.
@@ -329,7 +333,7 @@ SquareModels/
 │   ├── ModelPlotting.jl      # Plotting interface (functions defined by extension)
 │   └── utils.jl              # Helper functions
 ├── ext/
-│   ├── SquareModelsCairoMakieExt.jl # Plotting via CairoMakie (optional dep)
+│   ├── SquareModelsMakieExt.jl      # Plotting via Makie (optional dep)
 │   └── SquareModelsGAMSExt.jl       # GAMS/GDX support (optional dep)
 ├── examples/
 │   ├── quick_example.jl      # Simple labor market model
