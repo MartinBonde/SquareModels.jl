@@ -1126,3 +1126,50 @@ function assert_no_diff(a::ModelDictionary, b::ModelDictionary; atol::Real=1e-6,
 	end
 	return true
 end
+
+_excluded_base_name(v::AbstractVariableRef) = base_name(v)
+_excluded_base_name(s::AbstractString) = String(s)
+
+"""
+	assert_residuals_small(data::ModelDictionary; atol=1e-6, msg="", exclude=())
+
+Assert that every residual variable in the model is negligible (`|value| <= atol`).
+
+Residual variables are identified by `RESIDUAL_SUFFIX` (see [`residuals`](@ref)).
+After a successful solve they should all be ~0; a large residual indicates an
+equation that is not satisfied by the data/solution.
+
+`exclude` is a collection of residuals that are *allowed* to be nonzero (e.g.
+calibration residuals that intentionally absorb data discrepancies). Each element
+may be a `VariableRef` or a base-name `String`; matching is done on base name, so
+all indexed instances sharing that base name are excluded.
+
+Residuals with a `nothing` value are skipped. Throws an error listing the
+offending residuals (sorted by magnitude) if any exceed `atol`; returns `true`
+otherwise.
+
+# Example
+```julia
+assert_residuals_small(baseline; atol=1e-6, msg="Large residuals after solve")
+```
+
+See also: [`assert_no_diff`](@ref), [`residuals`](@ref)
+"""
+function assert_residuals_small(data::ModelDictionary; atol::Real=1e-6, msg::String="", exclude=())
+	error_msg = "$msg\n"
+	excluded = Set(_excluded_base_name(e) for e in exclude)
+	violations = Tuple{String, Float64}[]
+	for r in residuals(data.model)
+		base_name(r) in excluded && continue
+		v = data[r]
+		isnothing(v) && continue
+		abs_v = abs(v)
+		abs_v > atol && push!(violations, (name(r), abs_v))
+	end
+	if !isempty(violations)
+		sort!(violations, by=x -> -x[2])
+		lines = ["  $(k): |value|=$(v)" for (k, v) in violations]
+		error("$(error_msg)$(length(violations)) residuals exceed atol=$atol:\n" * join(lines, "\n"))
+	end
+	return true
+end
