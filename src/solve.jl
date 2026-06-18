@@ -7,6 +7,7 @@ using JuMP: lower_bound, upper_bound, set_lower_bound, set_upper_bound
 using JuMP: all_variables, is_fixed, value, add_to_expression!
 using JuMP: optimize!, assert_is_solved_and_feasible
 using JuMP: set_silent, unsafe_backend, backend, set_time_limit_sec
+using JuMP: FEASIBILITY_SENSE, set_objective_sense, set_optimizer_attribute
 import MathOptInterface as MOI
 
 # ============================================================================
@@ -412,6 +413,87 @@ function _build_model(
 end
 
 # ============================================================================
+# GAMS model construction
+# ============================================================================
+
+"""
+    gams_cns_model(; system_dir, working_dir=mktempdir(), solver="CONOPT4") -> Model
+
+Construct a JuMP `Model` configured to solve a square nonlinear system as a GAMS
+constrained nonlinear system (CNS).
+
+The model is set to `FEASIBILITY_SENSE` (no objective) and wired to the given GAMS
+`solver`. The workspace is built directly so its listing (`moi.lst`) lands in
+`working_dir`, which lets `solve!`/`annotate_lst!` locate and annotate it afterwards.
+
+Solver-specific tuning (e.g. CONOPT options) is left to the caller via
+`set_optimizer_attribute` on the returned model.
+
+# Arguments
+- `system_dir`: Path to the GAMS system directory (the folder containing `gams.exe`).
+- `working_dir`: Directory for GAMS scratch files and the `moi.lst` listing.
+- `solver`: GAMS CNS solver name (default `"CONOPT4"`).
+"""
+function gams_cns_model(; system_dir::AbstractString, working_dir::AbstractString=mktempdir(), solver::AbstractString="CONOPT4")
+    isdir(system_dir) || error("GAMS system directory not found: $system_dir")
+    mkpath(working_dir)
+    # GAMS.jl's optimize! swaps the args of GAMSWorkspace(working_dir, system_dir),
+    # so build the workspace here (correct order) instead of setting SysDir/WorkDir attributes.
+    workspace = GAMS.GAMSWorkspace(working_dir, system_dir)
+    model = Model(() -> GAMS.Optimizer(workspace))
+    set_objective_sense(model, FEASIBILITY_SENSE)
+    set_optimizer_attribute(model, GAMS.ModelType(), "CNS")
+    set_optimizer_attribute(model, "CNS", solver)
+    set_optimizer_attribute(model, GAMS.Solver(), solver)
+    set_optimizer_attribute(model, "lmmxsf", 1)
+    return model
+end
+
+# ============================================================================
+# GAMS listing annotation
+# ============================================================================
+
+"""Return the path to the `.lst` listing file written by `model`'s GAMS optimizer,
+or `nothing` if `model` is not solved through GAMS (or no listing exists yet)."""
+function _gams_lst_path(model)
+    backend = unsafe_backend(model)
+    backend isa GAMS.Optimizer || return nothing
+    work = backend.gamswork
+    work === nothing && return nothing
+    path = joinpath(work.working_dir, "moi.lst")
+    return isfile(path) ? path : nothing
+end
+
+"""
+    annotate_lst!(block::Block, path; out_path=path)
+
+Rewrite a GAMS `.lst`/`.gms` file in place, replacing GAMS.jl's generated `x<i>`/`eq<i>`
+symbols with the JuMP names of `block`'s endogenous variables.
+
+GAMS.jl numbers variables (`x<i>`) and equations (`eq<i>`) by their 1-based add-order, which
+matches the order in which `solve`/`solve!` adds `block.endogenous`/`block.equations` to the
+intermediate model (equation `i` pins `endogenous[i]`). This makes the otherwise opaque GAMS
+listing readable for debugging.
+
+By default `out_path == path`, so the file is overwritten in place; pass `out_path` to write
+elsewhere. The file is rewritten with `\\n` line endings. Returns `out_path`.
+"""
+function annotate_lst!(block::Block, path::AbstractString; out_path::AbstractString=path)
+    names = name.(block.endogenous)
+    rx = r"\b(x|eq)(\d+)\b"
+    function rename(m::AbstractString)
+        i = parse(Int, m[(startswith(m, "eq") ? 3 : 2):end])
+        1 <= i <= length(names) ? names[i] : m
+    end
+    # Heuristic, not a guarantee: `\bx\d+\b` also matches tokens like "x86" in the GAMS
+    # banner ("WEX-WEI ... x86 64bit"), so skip that line. Out-of-range indices elsewhere
+    # fall through unchanged, but a coincidental in-range `x<i>` would be mis-renamed.
+    lines = [occursin("WEX-WEI", l) ? l : replace(l, rx => rename) for l in readlines(path)]
+    write(out_path, join(lines, "\n") * "\n")
+    return out_path
+end
+
+# ============================================================================
 # solve
 # ============================================================================
 
@@ -516,6 +598,10 @@ function solve!(
 )
     model, var_map = _build_model(block, data; start_values, replace_nothing, skip_diagnostics)
     optimize!(model)
+
+    lst = _gams_lst_path(model)
+    lst === nothing || annotate_lst!(block, lst)
+
     assert_is_solved_and_feasible(model)
 
     for (original_var, solve_var) in var_map
