@@ -12,6 +12,7 @@ export endogenous, residuals, variables, exogenous, is_endogenous, overlaps, sha
 export VariableRef  # Re-exported from JuMP for macro hygiene
 export ModelDictionary, fix, unfix, set_start_value, value, value_dict, add_missing_model_variables!
 export keys_match, assert_no_diff, assert_residuals_small
+export SquareModelError, ResidualError, ToleranceError, NonSquareError
 export unload, load, read_indices, read_sparse_array, read_variable
 export RESIDUAL_SUFFIX
 export solve, solve!, diagnose, annotate_lst!, gams_cns_model
@@ -35,6 +36,7 @@ using JuMP: set_name, name, fix, is_fixed, unfix, all_variables, value, set_star
 import MathOptInterface as MOI
 const _name_lookup_cache = WeakKeyDict{AbstractModel, Dict{String, VariableRef}}()
 
+include("errors.jl")
 include("utils.jl")
 include("SparseZeroArrays.jl")
 

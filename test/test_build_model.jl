@@ -456,7 +456,7 @@ end
     data[residuals(b2)] .= 0.0
     block = b1 + b2
 
-    @test_throws ErrorException solve(block, data)
+    @test_throws NonSquareError solve(block, data)
 
     # skip_diagnostics allows it through (solver may still fail)
     solve_model, var_map = _build_model(block, data; skip_diagnostics=true)
@@ -587,7 +587,7 @@ end
     end
     data[residuals(block)] .= 0.0
 
-    @test_throws ErrorException solve(block, data)
+    @test_throws NonSquareError solve(block, data)
 
     # skip_diagnostics lets it through
     solve_model, var_map = _build_model(block, data; skip_diagnostics=true)

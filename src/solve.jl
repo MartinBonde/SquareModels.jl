@@ -404,8 +404,8 @@ function _build_model(
     if !skip_diagnostics
         orphans = OrphanVariable[OrphanVariable(v) for v in block.endogenous if v ∉ endos_used]
         if !isempty(trivial) || !isempty(orphans)
-            error("Model is not effectively square after substituting exogenous values.\n" *
-                  _format_diagnostic_error(trivial, orphans))
+            throw(NonSquareError("Model is not effectively square after substituting exogenous values.\n" *
+                  _format_diagnostic_error(trivial, orphans)))
         end
     end
 

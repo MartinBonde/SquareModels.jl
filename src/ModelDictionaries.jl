@@ -1073,10 +1073,7 @@ function assert_no_diff(a::ModelDictionary, b::ModelDictionary; atol::Real=1e-6,
 	end
 	if !isempty(violations)
 		sort!(violations, by=x -> -x[2])
-		lines = [isinf(rd) ? "  $k: diff=$d ($v1 vs $v2)" : "  $k: diff=$d ($(round(rd*100, digits=2))%) ($v1 vs $v2)"
-		         for (k, d, rd, v1, v2) in violations]
-		tol_desc = rtol > 0 ? "atol=$atol, rtol=$rtol" : "atol=$atol"
-		error("$(error_msg)$(length(violations)) differences exceed tolerance ($tol_desc):\n" * join(lines, "\n"))
+		throw(ToleranceError(violations, Float64(atol), Float64(rtol), msg))
 	end
 	return true
 end
@@ -1110,7 +1107,6 @@ assert_residuals_small(baseline; atol=1e-6, msg="Large residuals after solve")
 See also: [`assert_no_diff`](@ref), [`residuals`](@ref)
 """
 function assert_residuals_small(data::ModelDictionary; atol::Real=1e-6, msg::String="", exclude=())
-	error_msg = "$msg\n"
 	excluded = Set(_excluded_base_name(e) for e in exclude)
 	violations = Tuple{String, Float64}[]
 	for r in residuals(data.model)
@@ -1122,8 +1118,7 @@ function assert_residuals_small(data::ModelDictionary; atol::Real=1e-6, msg::Str
 	end
 	if !isempty(violations)
 		sort!(violations, by=x -> -x[2])
-		lines = ["  $(k): |value|=$(v)" for (k, v) in violations]
-		error("$(error_msg)$(length(violations)) residuals exceed atol=$atol:\n" * join(lines, "\n"))
+		throw(ResidualError(violations, Float64(atol), msg))
 	end
 	return true
 end
