@@ -3,6 +3,7 @@ module TestIntegration
 using Test
 import JuMP
 using JuMP: Model, set_silent, @variable, all_variables
+using JuMP: objective_sense, get_optimizer_attribute, FEASIBILITY_SENSE
 using SquareModels
 using Ipopt
 
@@ -133,6 +134,35 @@ end
         expenditure = result[p1] * result[x1[i]] + result[p2] * result[x2[i]]
         @test income ≈ expenditure atol=1e-5
     end
+end
+
+@testset "square_model (native optimizer)" begin
+    m = square_model(Ipopt.Optimizer; print_level = 0)
+    @test m isa Model
+    @test objective_sense(m) == FEASIBILITY_SENSE
+    @test get_optimizer_attribute(m, "print_level") == 0
+
+    JuMP.@variables m begin
+        x
+        y
+    end
+    db = ModelDictionary(m)
+    db[x] = 1.0; db[y] = 1.0
+
+    block = @block m begin
+        x, x == 10
+        y, y == 20
+    end
+    db[residuals(block)] .= 0.0
+
+    result = solve(block, db)
+    @test result[x] ≈ 10.0 atol=1e-6
+    @test result[y] ≈ 20.0 atol=1e-6
+end
+
+@testset "square_model argument errors" begin
+    @test_throws ErrorException square_model()
+    @test_throws ErrorException square_model(Ipopt.Optimizer; gamsdir = "C:/GAMS/53")
 end
 
 @testset "Quick Example (examples/quick_example.jl)" begin

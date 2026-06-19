@@ -1,23 +1,22 @@
 module SquareModelsGAMSExt
 
 import GAMS
-using JuMP: AbstractModel, Model, all_variables, unsafe_backend
-using JuMP: set_objective_sense, set_optimizer_attribute, FEASIBILITY_SENSE
+using JuMP: AbstractModel, all_variables, unsafe_backend, optimizer_with_attributes
 import SquareModels: ModelDictionary, _var_to_key, _build_slice_key
 
-function _gams_cns_model(; system_dir::AbstractString, working_dir::AbstractString=mktempdir(), solver::AbstractString="CONOPT4")
+function _gams_optimizer(; system_dir::AbstractString, working_dir::AbstractString=mktempdir(), solver::AbstractString="CONOPT4")
 	isdir(system_dir) || error("GAMS system directory not found: $system_dir")
 	mkpath(working_dir)
 	# GAMS.jl's optimize! swaps the args of GAMSWorkspace(working_dir, system_dir),
 	# so build the workspace here (correct order) instead of setting SysDir/WorkDir attributes.
 	workspace = GAMS.GAMSWorkspace(working_dir, system_dir)
-	model = Model(() -> GAMS.Optimizer(workspace))
-	set_objective_sense(model, FEASIBILITY_SENSE)
-	set_optimizer_attribute(model, GAMS.ModelType(), "CNS")
-	set_optimizer_attribute(model, "CNS", solver)
-	set_optimizer_attribute(model, GAMS.Solver(), solver)
-	set_optimizer_attribute(model, "lmmxsf", 1)
-	return model
+	return optimizer_with_attributes(
+		() -> GAMS.Optimizer(workspace),
+		GAMS.ModelType() => "CNS",
+		"CNS" => solver,
+		GAMS.Solver() => solver,
+		"lmmxsf" => 1,
+	)
 end
 
 function _gams_lst_path(model)
