@@ -8,7 +8,6 @@ using JuMP: all_variables, is_fixed, value, add_to_expression!
 using JuMP: optimize!, assert_is_solved_and_feasible
 using JuMP: set_silent, unsafe_backend, backend, set_time_limit_sec
 using JuMP: FEASIBILITY_SENSE, set_objective_sense, set_optimizer_attribute
-import Ipopt
 import MathOptInterface as MOI
 
 # ============================================================================
@@ -414,69 +413,49 @@ function _build_model(
 end
 
 # ============================================================================
-# GAMS model construction
+# Square-system model construction
 # ============================================================================
 
 """
-    gams_cns_model(; system_dir, working_dir=mktempdir(), solver="CONOPT4") -> Model
+    square_model(optimizer; options...) -> Model
+    square_model(; gamsdir, working_dir=mktempdir(), solver="CONOPT4", options...) -> Model
 
-Construct a JuMP `Model` configured to solve a square nonlinear system as a GAMS
-constrained nonlinear system (CNS).
+Construct a JuMP `Model` configured as a square nonlinear system: `FEASIBILITY_SENSE`
+(no objective), ready for `solve`/`solve!`.
 
-The model is set to `FEASIBILITY_SENSE` (no objective) and wired to the given GAMS
-`solver`. The workspace is built directly so its listing (`moi.lst`) lands in
-`working_dir`, which lets `solve!`/`annotate_lst!` locate and annotate it afterwards.
+Pass a positional `optimizer` exactly as in JuMP's `Model(optimizer)` — an optimizer
+constructor (e.g. `Ipopt.Optimizer`, `CONOPT.Optimizer`), a factory closure, or an
+`optimizer_with_attributes(...)` object.
 
-Solver-specific tuning (e.g. CONOPT options) is left to the caller via
-`set_optimizer_attribute` on the returned model.
+Alternatively, pass the `gamsdir` keyword to solve the system as a GAMS constrained
+nonlinear system (CNS), e.g. `square_model(; gamsdir = "C:/GAMS/53")`. This requires the
+optional `GAMS` package — run `using GAMS` first. The GAMS workspace is built so its
+listing (`moi.lst`) lands in `working_dir`, which lets `solve!`/`annotate_lst!` locate and
+annotate it afterwards.
 
-# Arguments
-- `system_dir`: Path to the GAMS system directory (the folder containing `gams.exe`).
+Extra keyword arguments are applied as optimizer attributes, e.g.
+`square_model(Ipopt.Optimizer; tol = 1e-10)` or `square_model(; gamsdir = "C:/GAMS/53", lmmxsf = 1)`.
+
+# GAMS keyword arguments
+- `gamsdir`: Path to the GAMS system directory (the folder containing `gams.exe`).
 - `working_dir`: Directory for GAMS scratch files and the `moi.lst` listing.
 - `solver`: GAMS CNS solver name (default `"CONOPT4"`).
 """
-function gams_cns_model(; kwargs...)
-    ext = Base.get_extension(@__MODULE__, :SquareModelsGAMSExt)
-    ext === nothing && error("`gams_cns_model` requires the GAMS package — run `using GAMS` first.")
-    return ext._gams_cns_model(; kwargs...)
-end
-
-# ============================================================================
-# Native solver model construction
-# ============================================================================
-
-"""
-    ipopt_model(; options...) -> Model
-
-Construct a JuMP `Model` backed by `Ipopt` and configured as a square nonlinear
-system (`FEASIBILITY_SENSE`, no objective).
-
-Extra keyword arguments are forwarded to the solver as optimizer attributes, e.g.
-`ipopt_model(tol = 1e-10)`.
-"""
-function ipopt_model(; options...)
-    model = Model(Ipopt.Optimizer)
+function square_model(optimizer=nothing; gamsdir=nothing, working_dir=nothing, solver="CONOPT4", options...)
+    if gamsdir !== nothing
+        optimizer === nothing || error("`square_model` takes either a positional `optimizer` or the `gamsdir` keyword, not both.")
+        ext = Base.get_extension(@__MODULE__, :SquareModelsGAMSExt)
+        ext === nothing && error("`gamsdir` requires the GAMS package — run `using GAMS` first.")
+        optimizer = ext._gams_optimizer(; system_dir=gamsdir, working_dir=(working_dir === nothing ? mktempdir() : working_dir), solver)
+    elseif optimizer === nothing
+        error("`square_model` requires a positional `optimizer` (e.g. `Ipopt.Optimizer`) or the `gamsdir` keyword.")
+    end
+    model = Model(optimizer)
     set_objective_sense(model, FEASIBILITY_SENSE)
     for (key, value) in options
         set_optimizer_attribute(model, string(key), value)
     end
     return model
-end
-
-"""
-    conopt_model(; options...) -> Model
-
-Construct a JuMP `Model` backed by `CONOPT` and configured as a square nonlinear
-system (`FEASIBILITY_SENSE`, no objective). The `lmmxsf = 1` option is applied by
-default; pass extra keyword arguments to set additional CONOPT options (or override
-the default), e.g. `conopt_model(rtredg = 1e-12)`.
-
-Requires the optional `CONOPT` package — run `using CONOPT` first.
-"""
-function conopt_model(; kwargs...)
-    ext = Base.get_extension(@__MODULE__, :SquareModelsCONOPTExt)
-    ext === nothing && error("`conopt_model` requires the CONOPT package — run `using CONOPT` first.")
-    return ext._conopt_model(; kwargs...)
 end
 
 # ============================================================================
@@ -553,7 +532,7 @@ with exogenous values copied from `data`.
 # Example
 ```julia
 using Ipopt
-model = Model(Ipopt.Optimizer)
+model = square_model(Ipopt.Optimizer)
 set_silent(model)  # Suppress solver output
 @variables model begin
     x

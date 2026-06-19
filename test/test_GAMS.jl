@@ -57,6 +57,33 @@ if GAMS_AVAILABLE
     @test solution[y] ≈ 25.0 atol=1e-6
 end
 
+@testset "square_model with gamsdir" begin
+    m = square_model(; gamsdir = GAMS_SYSDIR)
+    @test m isa Model
+
+    JuMP.@variables m begin
+        x
+        y
+        z
+    end
+
+    data = ModelDictionary(m)
+    data[x] = 1.0
+    data[y] = 2.0
+    data[z] = 5.0
+
+    block = @block m begin
+        x, x == z * 2
+        y, y == z^2
+    end
+    data[residuals(block)] .= 0.0
+
+    solution = solve(block, data)
+
+    @test solution[x] ≈ 10.0 atol=1e-6
+    @test solution[y] ≈ 25.0 atol=1e-6
+end
+
 @testset "annotate_lst! on real GAMS listing" begin
     # GAMS.jl suppresses the symbol listing ($offlisting, limrow/limcol/solprint=0), so a
     # clean solve never names x<i>/eq<i> in the .lst. CONOPT *does* name them when the square

@@ -15,7 +15,7 @@ export keys_match, assert_no_diff, assert_residuals_small
 export SquareModelError, ResidualError, ToleranceError, NonSquareError
 export unload, load, read_indices, read_sparse_array, read_variable
 export RESIDUAL_SUFFIX
-export solve, solve!, diagnose, annotate_lst!, gams_cns_model, conopt_model, ipopt_model
+export solve, solve!, diagnose, annotate_lst!, square_model
 export Tag, description, tags, has_tag, tagged, metadata
 export SparseZeroArray, ∑, use_sparse_zero_array!
 export ModelPlotting, @plot, plotvar, plotseries, labeled, LabeledSeries, AbstractSeries
