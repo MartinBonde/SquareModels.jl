@@ -8,9 +8,8 @@ using Parquet2
 using DataFrames
 using CSV
 
-# GDX tests require the GAMS runtime - skip in CI
-const IN_CI = get(ENV, "CI", "false") == "true"
-using GAMS: write_gdx
+# GDX read/write goes through GDXInterface (bundles gdx_jll), so no GAMS runtime is needed.
+using GDXInterface: write_gdx
 
 model = Model()
 vars = JuMP.@variables model begin
@@ -743,10 +742,8 @@ end
 end
 
 # =============================================================================
-# GDX file tests (only run when GAMS is available)
+# GDX file tests
 # =============================================================================
-
-if !IN_CI
 
 @testset "Test load from GDX - basic" begin
 	mktempdir() do tmpdir
@@ -866,8 +863,6 @@ end
 	end
 end
 
-end # if !IN_CI
-
 # Note: GDX files don't support Unicode symbol names (GAMS limitation).
 # Use ASCII names in GDX and rename when loading into JuMP models with Unicode names.
 
@@ -979,7 +974,6 @@ end
 	end
 end
 
-if !IN_CI
 @testset "Test load with slices - GDX" begin
 	mktempdir() do tmpdir
 		model = Model()
@@ -1003,7 +997,6 @@ if !IN_CI
 		@test d[X[2027]] == 240.0
 	end
 end
-end # if !IN_CI
 
 @testset "Test load with mixed renames and slices" begin
 	mktempdir() do tmpdir

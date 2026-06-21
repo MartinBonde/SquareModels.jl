@@ -5,6 +5,7 @@ using Dictionaries
 using Parquet2
 using DataFrames
 using CSV
+import GDXInterface
 
 """
     ModelDictionary
@@ -654,11 +655,45 @@ function load(path::AbstractString, model::AbstractModel, renames::Pair...; kwar
 	end
 end
 
-"""Load from a GDX file using GAMS.jl's read_gdx (provided by the GAMS extension)."""
+"""Load from a GDX file using GDXInterface.jl. Reads parameter/variable/equation
+records and aligns them to the model's variables (with optional renames/slices)."""
 function _load_gdx(path::AbstractString, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
-	ext = Base.get_extension(@__MODULE__, :SquareModelsGAMSExt)
-	ext === nothing && error("Loading `.gdx` files requires the GAMS package — run `using GAMS` first.")
-	return ext._load_gdx(path, model, rename_dict, slice_dict)
+	gdx = GDXInterface.read_gdx(String(path), DataFrame)
+
+	# Build index for O(1) lookup: (symbol, indices) => value
+	data_index = Dict{Tuple{String, String}, Float64}()
+
+	for (_, sym) in gdx
+		# Parameters expose :value, variables/equations expose :level; skip sets/aliases.
+		value_col = sym isa GDXInterface.GDXParameter ? :value :
+			sym isa Union{GDXInterface.GDXVariable, GDXInterface.GDXEquation} ? :level : continue
+		df = sym.records
+		isempty(df) && continue
+
+		# read_gdx lays out the domain columns first, followed by value columns.
+		domain_cols = names(df)[1:length(sym.domain)]
+		for row in eachrow(df)
+			indices_str = join((string(row[col]) for col in domain_cols), ",")
+			data_index[(sym.name, indices_str)] = row[value_col]
+		end
+	end
+
+	d = ModelDictionary(model)
+	for var in all_variables(model)
+		base, indices = _var_to_key(var)
+
+		if haskey(slice_dict, base)
+			gdx_symbol, fixed_indices, wildcard_positions = slice_dict[base]
+			key = (gdx_symbol, _build_slice_key(indices, fixed_indices, wildcard_positions))
+		else
+			key = (get(rename_dict, base, base), indices)
+		end
+
+		if haskey(data_index, key)
+			d[var] = data_index[key]
+		end
+	end
+	return d
 end
 
 """Normalize a tabular cell to String, treating missing as empty."""

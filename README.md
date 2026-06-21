@@ -334,7 +334,7 @@ SquareModels/
 │   └── utils.jl              # Helper functions
 ├── ext/
 │   ├── SquareModelsMakieExt.jl      # Plotting via Makie (optional dep)
-│   └── SquareModelsGAMSExt.jl       # GAMS/GDX support (optional dep)
+│   └── SquareModelsGAMSExt.jl       # GAMS CONOPT solver support (optional dep)
 ├── examples/
 │   ├── quick_example.jl      # Simple labor market model
 │   ├── modular_example.jl    # Modular CGE model example
