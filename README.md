@@ -243,12 +243,14 @@ save("gdp.png", fig)           # Makie's save; format inferred from extension
 @evalexpr data qGDP * pGDP
 @prt :p data qGDP[2020:2060]                  # percent growth
 @prt :q (scenario, baseline) qGDP[2020:2060]  # percent deviation from baseline
+@prt 2020:2060 qGDP                           # default source, selected periods
 
 # For interactive work, set defaults once and omit the source:
 set_default_source!(baseline => scenario)
 set_default_operator!(:q)
-@prt qGDP[2020:2060]
-@plot qGDP[2020:2060]
+set_default_periods!(2020:2060)
+@prt qGDP
+@plot qGDP
 reset_print_defaults!()
 
 # Multi-dimensional variables fan out into one line per leading index:

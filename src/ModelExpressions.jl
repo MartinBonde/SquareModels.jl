@@ -3,12 +3,14 @@
 module ModelExpressions
 
 using Base.Meta: isexpr
+import ..Window
 
 export @evalexpr, @prt
-export set_default_source!, set_default_operator!, reset_print_defaults!
+export set_default_source!, set_default_operator!, set_default_periods!, reset_print_defaults!
 
 const DEFAULT_SPECS = Ref{Any}(nothing)
 const DEFAULT_OPERATOR = Ref{Any}(:n)
+const DEFAULT_PERIODS = Ref{Any}(nothing)
 
 """
     set_default_source!(sources...)
@@ -32,10 +34,17 @@ function set_default_operator!(op)
 	return op
 end
 
+"""Set the default final-dimension periods used by `@prt`, `@evalexpr`, and `@plot`."""
+function set_default_periods!(periods)
+	DEFAULT_PERIODS[] = periods
+	return periods
+end
+
 """Clear interactive print/plot defaults."""
 function reset_print_defaults!()
 	DEFAULT_SPECS[] = nothing
 	DEFAULT_OPERATOR[] = :n
+	DEFAULT_PERIODS[] = nothing
 	return nothing
 end
 
@@ -49,6 +58,7 @@ function _active_specs()
 end
 
 _default_operator() = DEFAULT_OPERATOR[]
+_default_periods() = DEFAULT_PERIODS[]
 
 _to_float(x) = x === nothing ? NaN : Float64(x)
 
@@ -143,20 +153,30 @@ _op_label(label, op) = op == :n ? label : "$label <$op>"
 _has_source_binding(db, name::Symbol) = haskey(db, String(name)) || haskey(db.model, name)
 _lookup(db, name::Symbol, fallback) = _has_source_binding(db, name) ? db[name] : fallback()
 
+_with_periods(x, periods) = periods === nothing ? x : _slice_periods(x, periods)
+_slice_periods(x, periods) = x
+_slice_periods(x::AbstractArray, periods) = x[ntuple(_ -> Colon(), ndims(x) - 1)..., periods]
+_slice_periods(x::Window, periods) = x[ntuple(_ -> Colon(), ndims(x) - 1)..., periods]
+_period_ref(base, periods, indices...) = periods === nothing ? base[indices...] : base[indices[1:end-1]..., periods]
+
 const _DOTTABLE_OPS = (:+, :-, :*, :/, :^, :%, :\)
 
 """Rewrite an expression AST so bare variable names prefer `db[:name]` lookups."""
-function _rewrite(ex, dbv)
+function _rewrite(ex, dbv, periodv=nothing)
 	lookup_ref = GlobalRef(@__MODULE__, :_lookup)
-	ex isa Symbol && return :($lookup_ref($dbv, $(QuoteNode(ex)), () -> $ex))
+	ex isa Symbol && return _period_expr(:($lookup_ref($dbv, $(QuoteNode(ex)), () -> $ex)), periodv)
 	ex isa Expr || return ex
 	if ex.head === :ref
 		base = ex.args[1]
-		newbase = base isa Symbol ? :($lookup_ref($dbv, $(QuoteNode(base)), () -> $base)) : _rewrite(base, dbv)
-		return Expr(:ref, newbase, ex.args[2:end]...)
+		newbase = base isa Symbol ? :($lookup_ref($dbv, $(QuoteNode(base)), () -> $base)) : _rewrite(base, dbv, periodv)
+		indices = Any[ex.args[2:end]...]
+		if periodv !== nothing && !isempty(indices) && _is_colon_index(indices[end])
+			return :($(GlobalRef(@__MODULE__, :_period_ref))($newbase, $periodv, $(indices...)))
+		end
+		return Expr(:ref, newbase, indices...)
 	elseif ex.head === :call
 		f = ex.args[1]
-		args = Any[_rewrite(a, dbv) for a in ex.args[2:end]]
+		args = Any[_rewrite(a, dbv, periodv) for a in ex.args[2:end]]
 		f in _DOTTABLE_OPS && return Expr(:call, Symbol(".", f), args...)
 		return Expr(:call, f, args...)
 	elseif ex.head === :.
@@ -164,9 +184,13 @@ function _rewrite(ex, dbv)
 	elseif ex.head === :$
 		return ex.args[1]
 	else
-		return Expr(ex.head, Any[_rewrite(a, dbv) for a in ex.args]...)
+		return Expr(ex.head, Any[_rewrite(a, dbv, periodv) for a in ex.args]...)
 	end
 end
+
+_is_colon_index(x) = x === Symbol(":")
+_period_expr(ex, ::Nothing) = ex
+_period_expr(ex, periodv) = :($(GlobalRef(@__MODULE__, :_with_periods))($ex, $periodv))
 
 function _collect_bases(ex, acc=Symbol[])
 	if ex isa Symbol
@@ -188,34 +212,42 @@ function _collect_bases(ex, acc=Symbol[])
 	return acc
 end
 
-_value_expr(item, dbv) = _rewrite(item, dbv)
+_value_expr(item, dbv, periodv) = _rewrite(item, dbv, periodv)
 
-function _ref_expr(item, refv)
+function _ref_expr(item, refv, periodv=nothing)
 	refv === nothing && return nothing
-	ex = _rewrite(item, refv)
+	ex = _rewrite(item, refv, periodv)
 	return :(() -> $ex)
 end
 
-function _value_arg(expr, dbv, refv, ops, apply_ref)
+function _value_arg(expr, dbv, refv, periodv, ops, apply_ref)
 	if isexpr(expr, :vect)
-		items = Any[_value_arg(it, dbv, refv, ops, apply_ref) for it in expr.args]
+		items = Any[_value_arg(it, dbv, refv, periodv, ops, apply_ref) for it in expr.args]
 		return Expr(:vect, items...)
 	end
-	ref = _ref_expr(expr, refv)
-	return :($apply_ref($ops, $(_value_expr(expr, dbv)), $ref))
+	ref = _ref_expr(expr, refv, periodv)
+	return :($apply_ref($ops, $(_value_expr(expr, dbv, periodv)), $ref))
 end
 
 _is_op_literal(x::QuoteNode) = x.value isa Symbol
 _is_op_literal(x::Expr) = isexpr(x, :vect) && all(_is_op_literal, x.args)
 _is_op_literal(_) = false
 
+_is_period_literal(x::Number) = true
+_is_period_literal(x::Expr) = (isexpr(x, :call) && x.args[1] === :(:)) || (isexpr(x, :vect) && !_is_op_literal(x))
+_is_period_literal(_) = false
+
 function _macro_parts(args)
 	default_operator = :(($(GlobalRef(@__MODULE__, :_default_operator))()))
-	length(args) == 1 && return (default_operator, nothing, nothing, args[1], true)
-	length(args) == 2 && _is_op_literal(args[1]) && return (args[1], nothing, nothing, args[2], true)
-	length(args) == 2 && return (default_operator, args[1], nothing, args[2], false)
-	length(args) == 3 && return (args[1], args[2], nothing, args[3], false)
-	error("expected `expr`, `op expr`, `db expr`, or `ops db expr`")
+	length(args) == 1 && return (default_operator, nothing, nothing, args[1], true, nothing)
+	length(args) == 2 && _is_op_literal(args[1]) && return (args[1], nothing, nothing, args[2], true, nothing)
+	length(args) == 2 && _is_period_literal(args[1]) && return (default_operator, nothing, nothing, args[2], true, args[1])
+	length(args) == 2 && return (default_operator, args[1], nothing, args[2], false, nothing)
+	length(args) == 3 && _is_op_literal(args[1]) && _is_period_literal(args[2]) && return (args[1], nothing, nothing, args[3], true, args[2])
+	length(args) == 3 && _is_period_literal(args[1]) && return (default_operator, args[2], nothing, args[3], false, args[1])
+	length(args) == 3 && return (args[1], args[2], nothing, args[3], false, nothing)
+	length(args) == 4 && _is_op_literal(args[1]) && _is_period_literal(args[2]) && return (args[1], args[3], nothing, args[4], false, args[2])
+	error("expected `expr`, `op expr`, `periods expr`, `db expr`, `op db expr`, or `op periods db expr`")
 end
 
 function _db_parts(db, ref)
@@ -224,17 +256,20 @@ function _db_parts(db, ref)
 end
 
 function _eval_macro(args)
-	ops, db, ref, expr, use_defaults = _macro_parts(args)
+	ops, db, ref, expr, use_defaults, periods = _macro_parts(args)
 	dbv = gensym(:db)
 	refv = gensym(:ref)
+	periodv = gensym(:periods)
 	apply_ref = GlobalRef(@__MODULE__, :_apply_ops)
+	default_periods_ref = GlobalRef(@__MODULE__, :_default_periods)
+	period_arg = periods === nothing ? :($default_periods_ref()) : esc(periods)
 	if use_defaults
 		specsv = gensym(:defaults)
 		specv = gensym(:spec)
 		default_specs_ref = GlobalRef(@__MODULE__, :_active_specs)
-		arg = _value_arg(expr, dbv, refv, ops, apply_ref)
+		arg = _value_arg(expr, dbv, refv, periodv, ops, apply_ref)
 		return quote
-			let $specsv = $default_specs_ref()
+			let $specsv = $default_specs_ref(), $(esc(periodv)) = $period_arg
 				if length($specsv) == 1
 					let $specv = only($specsv), $(esc(dbv)) = getproperty($specv, :source), $(esc(refv)) = getproperty($specv, :reference)
 						$(esc(arg))
@@ -249,15 +284,15 @@ function _eval_macro(args)
 	end
 	primary, ref = _db_parts(db, ref)
 	refv = ref === nothing ? nothing : refv
-	arg = _value_arg(expr, dbv, refv, ops, apply_ref)
+	arg = _value_arg(expr, dbv, refv, periodv, ops, apply_ref)
 	body = quote
-		let $(esc(dbv)) = $(esc(primary))
+		let $(esc(dbv)) = $(esc(primary)), $(esc(periodv)) = $period_arg
 			$(esc(arg))
 		end
 	end
 	ref === nothing && return body
 	return quote
-		let $(esc(dbv)) = $(esc(primary)), $(esc(refv)) = $(esc(ref))
+		let $(esc(dbv)) = $(esc(primary)), $(esc(refv)) = $(esc(ref)), $(esc(periodv)) = $period_arg
 			$(esc(arg))
 		end
 	end
@@ -266,6 +301,8 @@ end
 """
     @evalexpr db expr
     @evalexpr op db expr
+    @evalexpr periods expr
+    @evalexpr op periods expr
     @evalexpr ops db [expr1, expr2, ...]
 
 Evaluate one or more model expressions, resolving bare names against `db`.
@@ -277,6 +314,8 @@ end
 """
     @prt db expr
     @prt op db expr
+    @prt periods expr
+    @prt op periods expr
     @prt ops db [expr1, expr2, ...]
 
 Evaluate a model expression for display in the REPL. This is an alias for

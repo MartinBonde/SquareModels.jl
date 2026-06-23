@@ -28,7 +28,7 @@ module ModelPlotting
 using Base.Meta: isexpr
 import ..AbstractSeries   # shared supertype with `Window` (defined in the parent module)
 import ..Window
-using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _expand_ops, _macro_parts, _need_ref, _op_label, _ref_expr, _ref_value, _rewrite, _transform
+using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _default_periods, _expand_ops, _macro_parts, _need_ref, _op_label, _ref_expr, _ref_value, _rewrite, _transform
 
 export @plot, plotvar, plotseries, labeled, LabeledSeries
 
@@ -136,7 +136,16 @@ end
 _lines(v::AbstractSeries, label, xfrom) = expand(v)
 _lines(v, label, xfrom) = [labeled(v, label; xfrom)]
 
-function _op_lines(ops, x::AbstractSeries, ref, label, xfrom)
+function _filter_periods(s::LabeledSeries, periods)
+	periods === nothing && return s
+	keep = [_period_match(x, periods) for x in s.x]
+	any(keep) || return s
+	return LabeledSeries(s.x[keep], s.y[keep], s.label)
+end
+
+_period_match(x, periods) = periods isa Union{AbstractArray,Tuple,AbstractRange} ? x in periods : x == periods
+
+function _op_lines(ops, x::AbstractSeries, ref, label, xfrom, periods)
 	out = LabeledSeries[]
 	for op in _expand_ops(ops)
 		xlines = expand(x)
@@ -144,7 +153,7 @@ function _op_lines(ops, x::AbstractSeries, ref, label, xfrom)
 		for (i, s) in enumerate(xlines)
 			r = reflines === nothing ? ref : reflines[i].y
 			line_label = length(xlines) == 1 ? label : s.label
-			push!(out, LabeledSeries(s.x, _transform(op, s.y, r), _op_label(line_label, op)))
+			push!(out, _filter_periods(LabeledSeries(s.x, _transform(op, s.y, r), _op_label(line_label, op)), periods))
 		end
 	end
 	return out
@@ -155,10 +164,10 @@ function _ref_lines(ref, op)
 	return r isa AbstractSeries ? expand(r) : nothing
 end
 
-function _op_lines(ops, x, ref, label, xfrom)
+function _op_lines(ops, x, ref, label, xfrom, periods)
 	out = LabeledSeries[]
 	for op in _expand_ops(ops)
-		append!(out, _lines(_transform(op, x, ref), _op_label(label, op), xfrom))
+		append!(out, _filter_periods.(_lines(_transform(op, x, ref), _op_label(label, op), xfrom), Ref(periods)))
 	end
 	return out
 end
@@ -167,23 +176,25 @@ end
 # @plot macro
 # ----------------------------------------------------------------------------------------------------------------------
 
-_series_expr(item, dbv, refv, ops, oplines_ref) = begin
+_series_expr(item, dbv, refv, periodv, ops, oplines_ref) = begin
 	bases = _collect_bases(item)
 	cands = Expr(:tuple, Any[_rewrite(b, dbv) for b in bases]...)
 	ref = _ref_expr(item, refv)
-	:($oplines_ref($ops, $(_rewrite(item, dbv)), $ref, $(string(item)), $cands))
+	:($oplines_ref($ops, $(_rewrite(item, dbv)), $ref, $(string(item)), $cands, $periodv))
 end
 
-function _series_arg(expr, dbv, refv, ops, oplines_ref)
+function _series_arg(expr, dbv, refv, periodv, ops, oplines_ref)
 	vcat_ref = GlobalRef(Base, :vcat)
-	isexpr(expr, :vect) || return _series_expr(expr, dbv, refv, ops, oplines_ref)
-	items = Any[_series_expr(it, dbv, refv, ops, oplines_ref) for it in expr.args]
+	isexpr(expr, :vect) || return _series_expr(expr, dbv, refv, periodv, ops, oplines_ref)
+	items = Any[_series_expr(it, dbv, refv, periodv, ops, oplines_ref) for it in expr.args]
 	return Expr(:call, vcat_ref, items...)
 end
 
 """
     @plot db expr
     @plot op db expr
+    @plot periods expr
+    @plot op periods expr
     @plot ops db [expr1, expr2, ...]
 
 Plot one or more expressions of model variables, resolving bare names against the
@@ -193,6 +204,7 @@ ModelDictionary `db` and labelling each series with its source text.
 @plot db qGDP                       # single variable
 @plot :p db qGDP                    # percentage growth
 @plot :q (shock, baseline) qGDP     # percent deviation from baseline
+@plot 2020:2060 qGDP                # default source, limited to periods
 @plot db qGDP / qGDP[2019]          # normalised, label "qGDP / qGDP[2019]"
 @plot db [qGDP * pGDP, qGDP / qGDP[2019]]   # multiple series on one axis
 @plot db y                          # multi-dim y[region, year] → one line per region
@@ -206,20 +218,23 @@ values from the surrounding scope (e.g. `@plot db qGDP / \$base`). Arithmetic
 operators are applied elementwise.
 """
 macro plot(args...)
-	ops, db, ref, expr, use_defaults = _macro_parts(args)
+	ops, db, ref, expr, use_defaults, periods = _macro_parts(args)
 	dbv = gensym(:db)
 	refv = gensym(:ref)
+	periodv = gensym(:periods)
 	oplines_ref = GlobalRef(@__MODULE__, :_op_lines)
 	plotseries_ref = GlobalRef(@__MODULE__, :plotseries)
+	default_periods_ref = GlobalRef(@__MODULE__, :_default_periods)
+	period_arg = periods === nothing ? :($default_periods_ref()) : esc(periods)
 	if use_defaults
 		specsv = gensym(:defaults)
 		specv = gensym(:spec)
 		linesv = gensym(:lines)
 		default_specs_ref = GlobalRef(@__MODULE__, :_active_specs)
 		append_ref = GlobalRef(Base, :append!)
-		arg = _series_arg(expr, dbv, refv, ops, oplines_ref)
+		arg = _series_arg(expr, dbv, refv, periodv, ops, oplines_ref)
 		return quote
-			let $specsv = $default_specs_ref(), $linesv = LabeledSeries[]
+			let $specsv = $default_specs_ref(), $linesv = LabeledSeries[], $(esc(periodv)) = $period_arg
 				for $specv in $specsv
 					let $(esc(dbv)) = getproperty($specv, :source), $(esc(refv)) = getproperty($specv, :reference)
 						$append_ref($linesv, $(esc(arg)))
@@ -231,15 +246,15 @@ macro plot(args...)
 	end
 	primary, ref = _db_parts(db, ref)
 	refv = ref === nothing ? nothing : refv
-	arg = _series_arg(expr, dbv, refv, ops, oplines_ref)
+	arg = _series_arg(expr, dbv, refv, periodv, ops, oplines_ref)
 	body = quote
-		let $(esc(dbv)) = $(esc(primary))
+		let $(esc(dbv)) = $(esc(primary)), $(esc(periodv)) = $period_arg
 			$plotseries_ref($(esc(arg)))
 		end
 	end
 	ref === nothing && return body
 	return quote
-		let $(esc(dbv)) = $(esc(primary)), $(esc(refv)) = $(esc(ref))
+		let $(esc(dbv)) = $(esc(primary)), $(esc(refv)) = $(esc(ref)), $(esc(periodv)) = $period_arg
 			$plotseries_ref($(esc(arg)))
 		end
 	end

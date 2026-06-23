@@ -86,6 +86,23 @@ end
 
 	@test_throws ErrorException set_default_source!([baseline => baseline, baseline => shock])
 	@test_throws ErrorException set_default_source!((baseline, shock))
+
+	set_default_source!(baseline)
+	set_default_operator!(:n)
+	set_default_periods!(2021:2021)
+	@test @prt(p[:hh, :]) == [2]
+	@test @prt(p[:hh, 2020]) == 1
+	@test (@prt 2020:2020 p[:hh, :]) == [1]
+	@test (@prt 2021:2021 baseline p[:hh, :]) == [2]
+	series = @plot p
+	@test length(series) == 2
+	@test series[1].x == [2021]
+	@test series[1].y == [2.0]
+	@test series[2].x == [2021]
+	@test series[2].y == [20.0]
+	series = @plot 2020:2020 p
+	@test series[1].x == [2020]
+	@test series[1].y == [1.0]
 	reset_print_defaults!()
 end
 
