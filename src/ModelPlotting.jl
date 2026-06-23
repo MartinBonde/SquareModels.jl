@@ -27,6 +27,8 @@ module ModelPlotting
 
 using Base.Meta: isexpr
 import ..AbstractSeries   # shared supertype with `Window` (defined in the parent module)
+import ..Window
+using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _expand_ops, _macro_parts, _need_ref, _op_label, _ref_expr, _ref_value, _rewrite, _transform
 
 export @plot, plotvar, plotseries, labeled, LabeledSeries
 
@@ -55,7 +57,7 @@ to_series(y::Number) = (nothing, [_to_float(y)])
 axis_of(::Any) = nothing
 
 # `expand(s) -> Vector{LabeledSeries}` splits a series into individual lines. The
-# `Window` method (multi-dimensional fan-out) lives in the Makie extension.
+# `Window` method keeps model dimensions intact before any plotting backend is loaded.
 function expand end
 
 """
@@ -75,6 +77,28 @@ end
 to_series(s::LabeledSeries) = (s.x, s.y)
 axis_of(s::LabeledSeries) = s.x
 expand(s::LabeledSeries) = [s]
+
+_dim_keys(w::Window) = axes(w.indices)
+
+axis_of(w::Window) = _coerce_axis(collect(_dim_keys(w)[end]))
+
+_line_label(name, combo) = isempty(combo) ? name :
+	(isempty(name) ? join(combo, ", ") : "$name[$(join(combo, ", "))]")
+
+function expand(w::Window)
+	dk = _dim_keys(w)
+	xaxis = collect(dk[end])
+	x = _coerce_axis(xaxis)
+	name = w.varname === nothing ? "" : String(w.varname)
+	out = LabeledSeries[]
+	for combo in Iterators.product(dk[1:end-1]...)
+		y = Float64[_to_float(w[combo..., t]) for t in xaxis]
+		push!(out, LabeledSeries(collect(x), y, _line_label(name, combo)))
+	end
+	return out
+end
+
+to_series(w::Window) = (s = only(expand(w)); (s.x, s.y))
 
 """
     labeled(values, label; xfrom=())
@@ -112,75 +136,63 @@ end
 _lines(v::AbstractSeries, label, xfrom) = expand(v)
 _lines(v, label, xfrom) = [labeled(v, label; xfrom)]
 
+function _op_lines(ops, x::AbstractSeries, ref, label, xfrom)
+	out = LabeledSeries[]
+	for op in _expand_ops(ops)
+		xlines = expand(x)
+		reflines = _need_ref(op) ? _ref_lines(ref, op) : nothing
+		for (i, s) in enumerate(xlines)
+			r = reflines === nothing ? ref : reflines[i].y
+			line_label = length(xlines) == 1 ? label : s.label
+			push!(out, LabeledSeries(s.x, _transform(op, s.y, r), _op_label(line_label, op)))
+		end
+	end
+	return out
+end
+
+function _ref_lines(ref, op)
+	r = _ref_value(ref, op)
+	return r isa AbstractSeries ? expand(r) : nothing
+end
+
+function _op_lines(ops, x, ref, label, xfrom)
+	out = LabeledSeries[]
+	for op in _expand_ops(ops)
+		append!(out, _lines(_transform(op, x, ref), _op_label(label, op), xfrom))
+	end
+	return out
+end
+
 # ----------------------------------------------------------------------------------------------------------------------
 # @plot macro
 # ----------------------------------------------------------------------------------------------------------------------
-const _DOTTABLE_OPS = (:+, :-, :*, :/, :^, :%, :\)
 
-"""Rewrite an expression AST: bare variable names become `db[:name]` lookups and
-non-dot arithmetic operators become their broadcasting (dotted) form, so e.g.
-`qGDP * pGDP` evaluates elementwise as `db[:qGDP] .* db[:pGDP]`. Index positions,
-call heads, literals, and `\$(...)` interpolations are left untouched."""
-function _rewrite(ex, dbv)
-	ex isa Symbol && return :($dbv[$(QuoteNode(ex))])
-	ex isa Expr || return ex
-	if ex.head === :ref
-		base = ex.args[1]
-		newbase = base isa Symbol ? :($dbv[$(QuoteNode(base))]) : _rewrite(base, dbv)
-		return Expr(:ref, newbase, ex.args[2:end]...)  # indices unchanged
-	elseif ex.head === :call
-		f = ex.args[1]
-		args = Any[_rewrite(a, dbv) for a in ex.args[2:end]]
-		f in _DOTTABLE_OPS && return Expr(:call, Symbol(".", f), args...)
-		return Expr(:call, f, args...)
-	elseif ex.head === :.        # property access (e.g. Time.t) — external, leave as-is
-		return ex
-	elseif ex.head === :$        # interpolation — inject caller value verbatim
-		return ex.args[1]
-	else
-		return Expr(ex.head, Any[_rewrite(a, dbv) for a in ex.args]...)
-	end
-end
-
-"""Collect the unique variable base names referenced as values in `ex` (bare
-symbols and `:ref` bases), skipping index positions, call heads, and interpolations.
-These supply candidate year axes for arithmetic expressions."""
-function _collect_bases(ex, acc=Symbol[])
-	if ex isa Symbol
-		ex in acc || push!(acc, ex)
-	elseif ex isa Expr
-		if ex.head === :ref
-			_collect_bases(ex.args[1], acc)
-		elseif ex.head === :call
-			for a in ex.args[2:end]
-				_collect_bases(a, acc)
-			end
-		elseif ex.head === :$ || ex.head === :.
-			# external / interpolated — not a db variable
-		else
-			for a in ex.args
-				_collect_bases(a, acc)
-			end
-		end
-	end
-	return acc
-end
-
-_series_expr(item, dbv, lines_ref) = begin
+_series_expr(item, dbv, refv, ops, oplines_ref) = begin
 	bases = _collect_bases(item)
-	cands = Expr(:tuple, Any[:($dbv[$(QuoteNode(b))]) for b in bases]...)
-	:($lines_ref($(_rewrite(item, dbv)), $(string(item)), $cands))
+	cands = Expr(:tuple, Any[_rewrite(b, dbv) for b in bases]...)
+	ref = _ref_expr(item, refv)
+	:($oplines_ref($ops, $(_rewrite(item, dbv)), $ref, $(string(item)), $cands))
+end
+
+function _series_arg(expr, dbv, refv, ops, oplines_ref)
+	vcat_ref = GlobalRef(Base, :vcat)
+	isexpr(expr, :vect) || return _series_expr(expr, dbv, refv, ops, oplines_ref)
+	items = Any[_series_expr(it, dbv, refv, ops, oplines_ref) for it in expr.args]
+	return Expr(:call, vcat_ref, items...)
 end
 
 """
     @plot db expr
-    @plot db [expr1, expr2, ...]
+    @plot op db expr
+    @plot ops db [expr1, expr2, ...]
 
 Plot one or more expressions of model variables, resolving bare names against the
 ModelDictionary `db` and labelling each series with its source text.
 
 ```julia
 @plot db qGDP                       # single variable
+@plot :p db qGDP                    # percentage growth
+@plot :q (shock, baseline) qGDP     # percent deviation from baseline
 @plot db qGDP / qGDP[2019]          # normalised, label "qGDP / qGDP[2019]"
 @plot db [qGDP * pGDP, qGDP / qGDP[2019]]   # multiple series on one axis
 @plot db y                          # multi-dim y[region, year] → one line per region
@@ -193,19 +205,41 @@ Bare identifiers are treated as variables of `db`; use `\$(value)` to inject
 values from the surrounding scope (e.g. `@plot db qGDP / \$base`). Arithmetic
 operators are applied elementwise.
 """
-macro plot(db, expr)
+macro plot(args...)
+	ops, db, ref, expr, use_defaults = _macro_parts(args)
 	dbv = gensym(:db)
-	lines_ref = GlobalRef(@__MODULE__, :_lines)
+	refv = gensym(:ref)
+	oplines_ref = GlobalRef(@__MODULE__, :_op_lines)
 	plotseries_ref = GlobalRef(@__MODULE__, :plotseries)
-	vcat_ref = GlobalRef(Base, :vcat)
-	if isexpr(expr, :vect)
-		items = Any[_series_expr(it, dbv, lines_ref) for it in expr.args]
-		arg = Expr(:call, vcat_ref, items...)
-	else
-		arg = _series_expr(expr, dbv, lines_ref)
+	if use_defaults
+		specsv = gensym(:defaults)
+		specv = gensym(:spec)
+		linesv = gensym(:lines)
+		default_specs_ref = GlobalRef(@__MODULE__, :_active_specs)
+		append_ref = GlobalRef(Base, :append!)
+		arg = _series_arg(expr, dbv, refv, ops, oplines_ref)
+		return quote
+			let $specsv = $default_specs_ref(), $linesv = LabeledSeries[]
+				for $specv in $specsv
+					let $(esc(dbv)) = getproperty($specv, :source), $(esc(refv)) = getproperty($specv, :reference)
+						$append_ref($linesv, $(esc(arg)))
+					end
+				end
+				$plotseries_ref($linesv)
+			end
+		end
 	end
+	primary, ref = _db_parts(db, ref)
+	refv = ref === nothing ? nothing : refv
+	arg = _series_arg(expr, dbv, refv, ops, oplines_ref)
+	body = quote
+		let $(esc(dbv)) = $(esc(primary))
+			$plotseries_ref($(esc(arg)))
+		end
+	end
+	ref === nothing && return body
 	return quote
-		let $(esc(dbv)) = $(esc(db))
+		let $(esc(dbv)) = $(esc(primary)), $(esc(refv)) = $(esc(ref))
 			$plotseries_ref($(esc(arg)))
 		end
 	end

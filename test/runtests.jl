@@ -8,6 +8,7 @@ using Test
 	include("test_integration.jl")
 	include("test_tagged_variables.jl")
 	include("test_SparseZeroArray.jl")
+	include("test_ModelPlotting.jl")
 	include("test_GAMS.jl")
 
 	@testset "Examples" begin

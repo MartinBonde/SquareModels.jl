@@ -18,7 +18,8 @@ export RESIDUAL_SUFFIX
 export solve, solve!, diagnose, annotate_lst!, square_model
 export Tag, description, tags, has_tag, tagged, metadata
 export SparseZeroArray, ∑, use_sparse_zero_array!
-export ModelPlotting, @plot, plotvar, plotseries, labeled, LabeledSeries, AbstractSeries
+export ModelExpressions, ModelPlotting, @plot, @evalexpr, @prt, plotvar, plotseries, labeled, LabeledSeries, AbstractSeries
+export set_default_source!, set_default_operator!, reset_print_defaults!
 
 RESIDUAL_SUFFIX = "_J"  # Suffix for residual variables (J for "junk" or adjustment)
 
@@ -958,7 +959,9 @@ include("endo_exo_swap.jl")
 include("tagged_variables.jl")
 include("ModelDictionaries.jl")
 include("solve.jl")
+include("ModelExpressions.jl")
 include("ModelPlotting.jl")
+using .ModelExpressions: @evalexpr, @prt, set_default_source!, set_default_operator!, reset_print_defaults!
 using .ModelPlotting: @plot, plotvar, plotseries, labeled, LabeledSeries
 
 # Define _get_model for ModelDictionary (after ModelDictionaries.jl is included)

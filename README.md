@@ -3,6 +3,7 @@
 A JuMP extension for writing modular models with **square systems of equations** — systems where the number of constraints equals the number of endogenous variables.
 
 ## Motivation
+
 Large-scale macroeconomic models are typically "square" — each equation determines one endogenous variable. This package provides tools to:
 
 - **Map constraints to endogenous variables** — Each constraint is explicitly paired with the variable it determines
@@ -159,6 +160,7 @@ end
 When using `@block data` (with a `ModelDictionary`), residual values are automatically initialized to zero.
 
 Blocks can be combined with `+`:
+
 ```julia
 full_model = consumers + production + government
 ```
@@ -214,7 +216,7 @@ data[y[:electric, 2025:2060]] .= 0.8
 
 The returned `Window` supports broadcasting (`.=`, `.*`, etc.) and iteration, but external libraries (e.g. Makie) may require `collect` or `Float64.()` to convert to a plain `Vector`. The `ModelPlotting` submodule (below) handles this conversion for you.
 
-### Plotting
+### Plotting and printing
 
 Plotting is delegated to [Makie](https://docs.makie.org): the package extension teaches Makie how to turn an `AbstractSeries` (a `Window` or a `LabeledSeries`) into x/y data via `Makie.convert_arguments`, so all the usual Makie verbs accept model data directly. It handles the `Window` → numeric conversion, axis labels (e.g. years parsed from the variable index), and legend labels (the variable name). A multi-dimensional variable fans out into one line per leading-index combination — the last dimension is the x-axis, so `y[region, year]` plots one line per region over the years.
 
@@ -236,6 +238,18 @@ save("gdp.png", fig)           # Makie's save; format inferred from extension
 # Bare names resolve against `data`; arithmetic is applied elementwise.
 @plot data qGDP / qGDP[2019]
 @plot data [qGDP * pGDP, qGDP / qGDP[2019]]
+
+# Evaluate or print the same expressions without plotting:
+@evalexpr data qGDP * pGDP
+@prt :p data qGDP[2020:2060]                  # percent growth
+@prt :q (scenario, baseline) qGDP[2020:2060]  # percent deviation from baseline
+
+# For interactive work, set defaults once and omit the source:
+set_default_source!(baseline => scenario)
+set_default_operator!(:q)
+@prt qGDP[2020:2060]
+@plot qGDP[2020:2060]
+reset_print_defaults!()
 
 # Multi-dimensional variables fan out into one line per leading index:
 @plot data emissions          # emissions[region, year] → one line per region
@@ -321,7 +335,7 @@ use_sparse_zero_array!(true)   # Re-enable (default)
 
 ## Project Structure
 
-```
+```text
 SquareModels/
 ├── src/
 │   ├── SquareModels.jl       # Main module: Block, @block, @endo_exo_swap!
@@ -330,6 +344,7 @@ SquareModels/
 │   ├── ModelDictionaries.jl  # Variable-value mappings
 │   ├── solve.jl              # Solve functions
 │   ├── tagged_variables.jl   # @variables macro with tags/descriptions
+│   ├── ModelExpressions.jl   # Model expression evaluation and REPL printing
 │   ├── ModelPlotting.jl      # Plotting interface (functions defined by extension)
 │   └── utils.jl              # Helper functions
 ├── ext/
@@ -344,7 +359,9 @@ SquareModels/
 ```
 
 ## License
+
 This project is licensed under an MIT license — see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
+
 This work is part of the [DREAM](https://dreamgruppen.dk/) group's effort to modernize economic modeling tools in Denmark and the rest of the world.
