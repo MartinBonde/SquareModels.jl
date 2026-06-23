@@ -3,6 +3,20 @@ module TestModelPlotting
 using Test
 using JuMP
 using SquareModels
+
+@testset "Plotting without Makie" begin
+	if Base.get_extension(SquareModels, :SquareModelsMakieExt) === nothing
+		err = try
+			plotseries([labeled([1.0, 2.0], "demo")])
+			nothing
+		catch err
+			err
+		end
+		@test err isa ErrorException
+		@test occursin("using CairoMakie", sprint(showerror, err))
+	end
+end
+
 using Makie
 
 @testset "Makie extension plotseries methods" begin

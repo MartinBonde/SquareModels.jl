@@ -20,8 +20,8 @@
 #     ModelDictionary and labels each series with its source text. `labeled` is
 #     the explicit escape hatch for programmatic construction.
 #
-# Drawing functions are empty generics until a Makie backend is loaded
-# (`using CairoMakie`); calling them before that raises a `MethodError`.
+# Drawing functions are supplied by the Makie extension once a backend is loaded
+# (`using CairoMakie`).
 
 module ModelPlotting
 
@@ -32,9 +32,17 @@ using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _default_per
 
 export @plot, plotvar, plotseries, labeled, LabeledSeries
 
-# Implemented in the Makie extension for `Window`; nothing to draw without it.
-function plotvar end
-function plotseries end
+# Implemented in the Makie extension; nothing to draw without it.
+function _plotting_error(name, args)
+	if Base.get_extension(parentmodule(@__MODULE__), :SquareModelsMakieExt) === nothing
+		error("`$name` requires Makie. Load a Makie backend first, e.g. `using CairoMakie`, then call `$name` again.")
+	end
+	types = join(string.(typeof.(args)), ", ")
+	error("No `$name` method for argument types ($types).")
+end
+
+plotvar(args...; kwargs...) = _plotting_error(:plotvar, args)
+plotseries(args...; kwargs...) = _plotting_error(:plotseries, args)
 
 """Convert a value to Float64, mapping `nothing` to `NaN` (like missing data)."""
 _to_float(x) = x === nothing ? NaN : Float64(x)
