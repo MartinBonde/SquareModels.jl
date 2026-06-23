@@ -3,8 +3,15 @@ module TestModelPlotting
 using Test
 using JuMP
 using SquareModels
+using Makie
 
-SquareModels.ModelPlotting.plotseries(series::AbstractVector{<:SquareModels.AbstractSeries}; kwargs...) = series
+@testset "Makie extension plotseries methods" begin
+	series = [labeled([1.0, 2.0], "demo")]
+	@test plotseries(series) isa Makie.Figure
+	@test plotseries(only(series)) isa Makie.Figure
+end
+
+SquareModels.ModelPlotting.plotseries(series::Vector{SquareModels.LabeledSeries}; kwargs...) = series
 
 model = Model()
 JuMP.@variables model begin
