@@ -813,6 +813,7 @@ macro block(model, expr)
 		"Invalid @block expression at $(line_number.file):$(line_number.line): $msg. Got $(sprint(show, it)).",
 	)
 	_is_equality(it) = isexpr(it, :call) && length(it.args) == 3 && it.args[1] == :(==)
+	_is_continuation(it) = isexpr(it, :call) && length(it.args) == 2 && it.args[1] in (:+, :-)
 	sm = @__MODULE__
 	block_macro_ref = GlobalRef(sm, Symbol("@_block"))
 	get_model_ref = GlobalRef(sm, :_get_model)
@@ -821,24 +822,33 @@ macro block(model, expr)
 	residuals_ref = GlobalRef(sm, :residuals)
 	line_number = expr.args[1]
 	@assert isa(line_number, LineNumberNode)
-	code = Expr(:tuple)
+	block_items = Tuple{LineNumberNode,Expr}[]
+	last_tuple = nothing
 	for it in expr.args
 	    if isa(it, LineNumberNode)
 	        line_number = it
 	    elseif isexpr(it, :tuple) # line with commas
 	        length(it.args) == 2 || _error(line_number, it, "Each line must be `variable, equation`")
 	        _is_equality(it.args[2]) || _error(line_number, it, "The equation must use `==`")
-	        macro_call = Expr(
-	            :macrocall,
-	            block_macro_ref,
-	            line_number,
-	            model,
-	            it.args...,
-	        )
-	        push!(code.args, esc(macro_call))
+	        push!(block_items, (line_number, it))
+	        last_tuple = it
+	    elseif _is_continuation(it) && last_tuple !== nothing
+	        eq = last_tuple.args[2]
+	        eq.args[3] = Expr(:call, it.args[1], eq.args[3], it.args[2])
 	    else
 	        _error(line_number, it, "Unexpected code in block body")
 	    end
+	end
+	code = Expr(:tuple)
+	for (line_number, it) in block_items
+	    macro_call = Expr(
+	        :macrocall,
+	        block_macro_ref,
+	        line_number,
+	        model,
+	        it.args...,
+	    )
+	    push!(code.args, esc(macro_call))
 	end
 	quote
 	    _container = $(esc(model))

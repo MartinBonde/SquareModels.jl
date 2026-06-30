@@ -101,7 +101,35 @@ end
 	end
 end
 
+@testset "@block accepts multiline equation continuations" begin
+	m = Model()
+	JuMP.@variables m begin
+		x
+		a
+		b
+		c
+		q
+	end
+
+	block = @block m begin
+		x, x == a
+			+ b
+			- c
+	end
+
+	@test length(block) == 1
+	@test all(v ∈ block.variables for v in [a, b, c])
+	@test q ∉ block.variables
+end
+
 @testset "@block rejects stray block expressions" begin
+	@test_throws LoadError @eval let m = Model()
+		@variable(m, q)
+		@block m begin
+			+ q
+		end
+	end
+
 	@test_throws LoadError @eval let m = Model()
 		JuMP.@variables m begin
 			x
@@ -109,7 +137,7 @@ end
 		end
 		@block m begin
 			x, x == 1
-				+ q
+			q
 		end
 	end
 
@@ -129,7 +157,9 @@ end
 			x, x == 1, q
 		end
 	end
+end
 
+@testset "@block malformed syntax is rejected by Julia parser" begin
 	@test_throws Meta.ParseError Meta.parse("""
 		@block m begin
 			x[t], x[t] ==
