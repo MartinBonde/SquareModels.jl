@@ -386,7 +386,8 @@ function _build_model(
 
     for (i, eq) in enumerate(block.equations)
         new_func = transform_expr(eq.func, var_map, data, endo_set)
-        @constraint(solve_model, new_func in eq.set)
+        con = @constraint(solve_model, new_func in eq.set)
+        set_name(con, name(block.endogenous[i]))
         if !skip_diagnostics
             if !_has_effective_variables(new_func)
                 push!(trivial, TrivialEquation(i, block.endogenous[i], block.residuals[i], _constant_value(new_func)))
@@ -430,8 +431,8 @@ constructor (e.g. `Ipopt.Optimizer`, `CONOPT.Optimizer`), a factory closure, or 
 Alternatively, pass the `gamsdir` keyword to solve the system as a GAMS constrained
 nonlinear system (CNS), e.g. `square_model(; gamsdir = "C:/GAMS/53")`. This requires the
 optional `GAMS` package — run `using GAMS` first. The GAMS workspace is built so its
-listing (`moi.lst`) lands in `working_dir`, which lets `solve!`/`annotate_lst!` locate and
-annotate it afterwards.
+GAMS outputs land in `working_dir`, which lets `solve!`/`annotate_lst!` locate and annotate
+them afterwards.
 
 Extra keyword arguments are applied as optimizer attributes, e.g.
 `square_model(Ipopt.Optimizer; tol = 1e-10)` or `square_model(; gamsdir = "C:/GAMS/53", lmmxsf = 1)`.
@@ -462,32 +463,46 @@ end
 # GAMS listing annotation
 # ============================================================================
 
-"""Return the path to the `.lst` listing file written by `model`'s GAMS optimizer,
-or `nothing` if `model` is not solved through GAMS (or no listing exists yet)."""
-function _gams_lst_path(model)
+"""Return GAMS files written by `model` that should be annotated after solving."""
+function _gams_annotation_paths(model)
     ext = Base.get_extension(@__MODULE__, :SquareModelsGAMSExt)
-    ext === nothing ? nothing : ext._gams_lst_path(model)
+    ext === nothing ? String[] : ext._gams_annotation_paths(model)
+end
+
+function _solve_equation_names(model)
+    names = String[]
+    for (F, S) in JuMP.list_of_constraint_types(model)
+        F <: MOI.VariableIndex && continue
+        append!(names, name.(JuMP.all_constraints(model, F, S)))
+    end
+    return names
 end
 
 """
     annotate_lst!(block::Block, path; out_path=path)
 
 Rewrite a GAMS `.lst`/`.gms` file in place, replacing GAMS.jl's generated `x<i>`/`eq<i>`
-symbols with the JuMP names of `block`'s endogenous variables.
+symbols with endogenous variable names.
 
-GAMS.jl numbers variables (`x<i>`) and equations (`eq<i>`) by their 1-based add-order, which
-matches the order in which `solve`/`solve!` adds `block.endogenous`/`block.equations` to the
-intermediate model (equation `i` pins `endogenous[i]`). This makes the otherwise opaque GAMS
-listing readable for debugging.
+GAMS.jl numbers variables (`x<i>`) by their 1-based add-order. Equation numbers (`eq<i>`)
+follow the constraint order exposed by the intermediate solve model; `solve!` passes that
+order explicitly so GAMS row names stay aligned with their row bodies.
 
 By default `out_path == path`, so the file is overwritten in place; pass `out_path` to write
 elsewhere. The file is rewritten with `\\n` line endings. Returns `out_path`.
 """
-function annotate_lst!(block::Block, path::AbstractString; out_path::AbstractString=path)
-    names = name.(block.endogenous)
+function annotate_lst!(
+    block::Block,
+    path::AbstractString;
+    out_path::AbstractString=path,
+    equation_names=name.(block.endogenous)
+)
+    variable_names = name.(block.endogenous)
     rx = r"\b(x|eq)(\d+)\b"
     function rename(m::AbstractString)
-        i = parse(Int, m[(startswith(m, "eq") ? 3 : 2):end])
+        is_equation = startswith(m, "eq")
+        names = is_equation ? equation_names : variable_names
+        i = parse(Int, m[(is_equation ? 3 : 2):end])
         1 <= i <= length(names) ? names[i] : m
     end
     # Heuristic, not a guarantee: `\bx\d+\b` also matches tokens like "x86" in the GAMS
@@ -604,8 +619,13 @@ function solve!(
     model, var_map = _build_model(block, data; start_values, replace_nothing, skip_diagnostics)
     optimize!(model)
 
-    lst = _gams_lst_path(model)
-    lst === nothing || annotate_lst!(block, lst)
+    paths = _gams_annotation_paths(model)
+    if !isempty(paths)
+        equation_names = _solve_equation_names(model)
+        for path in paths
+            annotate_lst!(block, path; equation_names)
+        end
+    end
 
     assert_is_solved_and_feasible(model)
 

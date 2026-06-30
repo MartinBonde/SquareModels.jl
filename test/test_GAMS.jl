@@ -130,6 +130,12 @@ end
     @test occursin("VARIABLE foo", content)
     @test !occursin(r"\bx1\b", content)
     @test !occursin(r"\beq1\b", content)
+
+    gms = joinpath(dir, "moi.gms")
+    @test isfile(gms)
+    gms_content = read(gms, String)
+    @test occursin("foo", gms_content)
+    @test !occursin(r"\beq1\b", gms_content)
 end
 
 else
@@ -182,7 +188,15 @@ end
     write(src, content)
     annotate_lst!(block, src; out_path=dst)
     @test occursin("x1", readlines(src)[2])
-    @test readlines(dst)[2] == "---- VAR α"
+    dst_lines = readlines(dst)
+    @test dst_lines[2] == "---- VAR α"
+    @test dst_lines[4] == "---- EQU α"
+
+    write(src, content)
+    annotate_lst!(block, src; equation_names=["β", "α"])
+    lines = readlines(src)
+    @test lines[4] == "---- EQU β"
+    @test lines[5] == "---- EQU α"
 end
 
 end # module

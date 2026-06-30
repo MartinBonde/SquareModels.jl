@@ -18,13 +18,12 @@ function _gams_optimizer(; system_dir::AbstractString, working_dir::AbstractStri
 	)
 end
 
-function _gams_lst_path(model)
+function _gams_annotation_paths(model)
 	backend = unsafe_backend(model)
-	backend isa GAMS.Optimizer || return nothing
+	backend isa GAMS.Optimizer || return String[]
 	work = backend.gamswork
-	work === nothing && return nothing
-	path = joinpath(work.working_dir, "moi.lst")
-	return isfile(path) ? path : nothing
+	work === nothing && return String[]
+	return filter(isfile, joinpath.(work.working_dir, ("moi.lst", "moi.gms")))
 end
 
 end

@@ -4,6 +4,7 @@ using Test
 using JuMP
 using SquareModels
 using Ipopt
+const MOI = JuMP.MOI
 
 # Access internal function for testing
 const _build_model = SquareModels._build_model
@@ -99,6 +100,38 @@ end
     # Calculate reduction compared to original variables
     reduction = 1 - length(all_variables(solve_model)) / model_vars_before
     @test reduction > 0.9  # More than 90% reduction
+end
+
+@testset "_build_model names solve constraints after endogenous variables" begin
+    model = Model(() -> MOI.Utilities.Model{Float64}())
+    JuMP.@variables model begin
+        x
+        y
+        z
+    end
+
+    data = ModelDictionary(model)
+    data[z] = 2.0
+
+    block = @block model begin
+        x, x == z
+        y, y == z^2
+    end
+    data[residuals(block)] .= 0.0
+
+    solve_model, _ = _build_model(block, data)
+    @test SquareModels._solve_equation_names(solve_model) == name.(endogenous(block))
+
+    swapped = copy(block)
+    @endo_exo_swap! swapped begin
+        residuals(swapped)[1], x
+    end
+
+    data[x] = 1.0
+    solve_model, _ = _build_model(swapped, data)
+    equation_names = SquareModels._solve_equation_names(solve_model)
+    @test equation_names == name.(endogenous(swapped))
+    @test name(residuals(swapped)[1]) in equation_names
 end
 
 @testset "solve updates data correctly" begin
