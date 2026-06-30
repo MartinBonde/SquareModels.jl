@@ -235,12 +235,22 @@ fig = plotvar(data, vGDP[2020:2060]; ylabel="Million EUR")
 save("gdp.png", fig)           # Makie's save; format inferred from extension
 
 # Plot expressions of variables; each series is labelled with its source text.
-# Bare names resolve against `data`; arithmetic is applied elementwise.
+# Bare names resolve against `data`; arithmetic operators are broadcast implicitly.
 @plot data qGDP / qGDP[2019]
 @plot data [qGDP * pGDP, qGDP / qGDP[2019]]
 
+# Explicit dots and Julia's @. macro also work:
+@plot data qGDP .* pGDP
+@plot data (@. qGDP * pGDP)
+
+# Named calls are left as written, so reductions stay reductions; write
+# explicit dots for elementwise functions and explicit generators for sums:
+@plot data log.(qGDP)
+@plot data sum(qX[s, :] for s in sectors)
+
 # Evaluate or print the same expressions without plotting:
 @evalexpr data qGDP * pGDP
+@evalexpr data (@. qGDP * pGDP)
 @prt :p data qGDP[2020:2060]                  # percent growth
 @prt :q (scenario, baseline) qGDP[2020:2060]  # percent deviation from baseline
 @prt 2020:2060 qGDP                           # default source, selected periods

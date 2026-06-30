@@ -3,6 +3,7 @@
 module ModelExpressions
 
 using Base.Meta: isexpr
+using JuMP: JuMP
 import ..Window
 
 export @evalexpr, @prt
@@ -63,7 +64,7 @@ _default_periods() = DEFAULT_PERIODS[]
 _to_float(x) = x === nothing ? NaN : Float64(x)
 
 _as_numeric(x::Number) = Float64(x)
-_as_numeric(x) = [_to_float(v) for v in collect(x)]
+_as_numeric(x) = [_to_float(v) for v in Array(x)]
 
 function _lag1(a::AbstractArray)
 	out = similar(a, Float64)
@@ -150,8 +151,10 @@ end
 
 _op_label(label, op) = op == :n ? label : "$label <$op>"
 
-_has_source_binding(db, name::Symbol) = haskey(db, String(name)) || haskey(db.model, name)
-_lookup(db, name::Symbol, fallback) = _has_source_binding(db, name) ? db[name] : fallback()
+_lookup(db, name::Symbol, fallback) = haskey(db.model, name) ? db.model[name] : (haskey(db, String(name)) ? db[name] : fallback())
+_value(db, x) = JuMP.value(v -> db[v], x)
+_value(db, x::AbstractArray{<:Number}) = x
+_value(db, x::Tuple) = map(y -> _value(db, y), x)
 
 _with_periods(x, periods) = periods === nothing ? x : _slice_periods(x, periods)
 _slice_periods(x, periods) = x
@@ -159,16 +162,26 @@ _slice_periods(x::AbstractArray, periods) = x[ntuple(_ -> Colon(), ndims(x) - 1)
 _slice_periods(x::Window, periods) = x[ntuple(_ -> Colon(), ndims(x) - 1)..., periods]
 _period_ref(base, periods, indices...) = periods === nothing ? base[indices...] : base[indices[1:end-1]..., periods]
 
-const _DOTTABLE_OPS = (:+, :-, :*, :/, :^, :%, :\)
+# Only arithmetic operators broadcast implicitly (`a * b` -> `a .* b`). Named
+# calls (`sum`, `log`, ...) are left as written, so reductions stay reductions;
+# use explicit dots (e.g. `log.(x)`) for elementwise function application.
+const _DOT_OPS = (:+, :-, :*, :/, :^, :%, :\)
+_is_dot_macro(ex) = isexpr(ex, :macrocall) && ex.args[1] === Symbol("@__dot__")
+_expand_dot_macro(ex) = _is_dot_macro(ex) ? macroexpand(@__MODULE__, ex) : ex
 
-"""Rewrite an expression AST so bare variable names prefer `db[:name]` lookups."""
-function _rewrite(ex, dbv, periodv=nothing)
+function _model_binding_expr(dbv, name::Symbol, periodv=nothing)
 	lookup_ref = GlobalRef(@__MODULE__, :_lookup)
-	ex isa Symbol && return _period_expr(:($lookup_ref($dbv, $(QuoteNode(ex)), () -> $ex)), periodv)
+	return _period_expr(:($lookup_ref($dbv, $(QuoteNode(name)), () -> $name)), periodv)
+end
+
+"""Rewrite an expression AST so bare variable names prefer JuMP variables from `db.model`."""
+function _rewrite(ex, dbv, periodv=nothing, bound=())
+	ex isa Symbol && return ex in bound ? ex : _model_binding_expr(dbv, ex, periodv)
 	ex isa Expr || return ex
+	ex = _expand_dot_macro(ex)
 	if ex.head === :ref
 		base = ex.args[1]
-		newbase = base isa Symbol ? :($lookup_ref($dbv, $(QuoteNode(base)), () -> $base)) : _rewrite(base, dbv, periodv)
+		newbase = base isa Symbol && !(base in bound) ? _model_binding_expr(dbv, base) : _rewrite(base, dbv, periodv, bound)
 		indices = Any[ex.args[2:end]...]
 		if periodv !== nothing && !isempty(indices) && _is_colon_index(indices[end])
 			return :($(GlobalRef(@__MODULE__, :_period_ref))($newbase, $periodv, $(indices...)))
@@ -176,48 +189,91 @@ function _rewrite(ex, dbv, periodv=nothing)
 		return Expr(:ref, newbase, indices...)
 	elseif ex.head === :call
 		f = ex.args[1]
-		args = Any[_rewrite(a, dbv, periodv) for a in ex.args[2:end]]
-		f in _DOTTABLE_OPS && return Expr(:call, Symbol(".", f), args...)
-		return Expr(:call, f, args...)
+		args = Any[_rewrite(a, dbv, periodv, bound) for a in ex.args[2:end]]
+		return f in _DOT_OPS ? Expr(:call, Symbol(".", f), args...) : Expr(:call, f, args...)
+	elseif ex.head === :generator
+		return _rewrite_generator(ex, dbv, periodv, bound)
 	elseif ex.head === :.
-		return ex
+		isexpr(ex.args[2], :tuple) || return ex
+		return Expr(:., ex.args[1], Expr(:tuple, Any[_rewrite(a, dbv, periodv, bound) for a in ex.args[2].args]...))
 	elseif ex.head === :$
 		return ex.args[1]
 	else
-		return Expr(ex.head, Any[_rewrite(a, dbv, periodv) for a in ex.args]...)
+		return Expr(ex.head, Any[_rewrite(a, dbv, periodv, bound) for a in ex.args]...)
 	end
 end
+
+function _rewrite_generator(ex, dbv, periodv, bound)
+	new_args = Any[]
+	current_bound = bound
+	for arg in ex.args[2:end]
+		if isexpr(arg, :(=))
+			push!(new_args, Expr(:(=), arg.args[1], _rewrite(arg.args[2], dbv, periodv, current_bound)))
+			current_bound = (current_bound..., _binding_symbols(arg.args[1])...)
+		else
+			push!(new_args, _rewrite(arg, dbv, periodv, current_bound))
+		end
+	end
+	return Expr(:generator, _rewrite(ex.args[1], dbv, periodv, current_bound), new_args...)
+end
+
+_binding_symbols(x::Symbol) = (x,)
+_binding_symbols(x::Expr) = Tuple(Symbol[s for a in x.args for s in _binding_symbols(a)])
+_binding_symbols(_) = ()
 
 _is_colon_index(x) = x === Symbol(":")
 _period_expr(ex, ::Nothing) = ex
 _period_expr(ex, periodv) = :($(GlobalRef(@__MODULE__, :_with_periods))($ex, $periodv))
 
-function _collect_bases(ex, acc=Symbol[])
+function _collect_bases(ex, acc=Symbol[], bound=())
 	if ex isa Symbol
+		ex in bound && return acc
 		ex in acc || push!(acc, ex)
 	elseif ex isa Expr
+		ex = _expand_dot_macro(ex)
 		if ex.head === :ref
-			_collect_bases(ex.args[1], acc)
+			_collect_bases(ex.args[1], acc, bound)
 		elseif ex.head === :call
 			for a in ex.args[2:end]
-				_collect_bases(a, acc)
+				_collect_bases(a, acc, bound)
 			end
-		elseif ex.head === :$ || ex.head === :.
+		elseif ex.head === :generator
+			_collect_generator_bases(ex, acc, bound)
+		elseif ex.head === :.
+			if isexpr(ex.args[2], :tuple)
+				for a in ex.args[2].args
+					_collect_bases(a, acc, bound)
+				end
+			end
+		elseif ex.head === :$
 		else
 			for a in ex.args
-				_collect_bases(a, acc)
+				_collect_bases(a, acc, bound)
 			end
 		end
 	end
 	return acc
 end
 
-_value_expr(item, dbv, periodv) = _rewrite(item, dbv, periodv)
+function _collect_generator_bases(ex, acc, bound)
+	current_bound = bound
+	for arg in ex.args[2:end]
+		if isexpr(arg, :(=))
+			_collect_bases(arg.args[2], acc, current_bound)
+			current_bound = (current_bound..., _binding_symbols(arg.args[1])...)
+		else
+			_collect_bases(arg, acc, current_bound)
+		end
+	end
+	return _collect_bases(ex.args[1], acc, current_bound)
+end
+
+_value_expr(item, dbv, periodv) = :($(GlobalRef(@__MODULE__, :_value))($dbv, $(_rewrite(item, dbv, periodv))))
 
 function _ref_expr(item, refv, periodv=nothing)
 	refv === nothing && return nothing
 	ex = _rewrite(item, refv, periodv)
-	return :(() -> $ex)
+	return :(() -> $(GlobalRef(@__MODULE__, :_value))($refv, $ex))
 end
 
 function _value_arg(expr, dbv, refv, periodv, ops, apply_ref)

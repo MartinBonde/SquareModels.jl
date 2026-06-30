@@ -28,7 +28,7 @@ module ModelPlotting
 using Base.Meta: isexpr
 import ..AbstractSeries   # shared supertype with `Window` (defined in the parent module)
 import ..Window
-using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _default_periods, _expand_ops, _macro_parts, _need_ref, _op_label, _ref_expr, _ref_value, _rewrite, _transform
+using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _default_periods, _expand_dot_macro, _expand_ops, _macro_parts, _need_ref, _op_label, _ref_expr, _ref_value, _rewrite, _transform, _value_expr
 
 export @plot, plotvar, plotseries, labeled, LabeledSeries
 
@@ -60,7 +60,7 @@ end
 function to_series end
 function axis_of end
 
-to_series(y::AbstractArray) = (nothing, [_to_float(v) for v in vec(collect(y))])
+to_series(y::AbstractArray) = (nothing, [_to_float(v) for v in vec(Array(y))])
 to_series(y::Number) = (nothing, [_to_float(y)])
 axis_of(::Any) = nothing
 
@@ -142,7 +142,22 @@ end
 # `Window`) is fanned out with its own labels; anything else becomes a single
 # labelled line using the expression's source text.
 _lines(v::AbstractSeries, label, xfrom) = expand(v)
+_lines(v::AbstractArray, label, xfrom) = _array_lines(v, label, xfrom)
 _lines(v, label, xfrom) = [labeled(v, label; xfrom)]
+
+function _array_lines(v::AbstractArray, label, xfrom)
+	dims = axes(v)
+	ndims(v) == 0 && return [labeled(only(v), label; xfrom)]
+	ndims(v) <= 1 && return [LabeledSeries(_coerce_axis(collect(dims[end])), Float64[_to_float(y) for y in Array(v)], string(label))]
+	idx_dims = axes(v)
+	x = _coerce_axis(collect(dims[end]))
+	out = LabeledSeries[]
+	for combo in Iterators.product(idx_dims[1:end-1]...)
+		y = Float64[_to_float(v[combo..., t]) for t in idx_dims[end]]
+		push!(out, LabeledSeries(collect(x), y, _line_label(label, combo)))
+	end
+	return out
+end
 
 function _filter_periods(s::LabeledSeries, periods)
 	periods === nothing && return s
@@ -152,6 +167,9 @@ function _filter_periods(s::LabeledSeries, periods)
 end
 
 _period_match(x, periods) = periods isa Union{AbstractArray,Tuple,AbstractRange} ? x in periods : x == periods
+
+# Label each series with the source text the user wrote (with any `@.` expanded).
+_label_text(ex) = string(_expand_dot_macro(ex))
 
 function _op_lines(ops, x::AbstractSeries, ref, label, xfrom, periods)
 	out = LabeledSeries[]
@@ -172,6 +190,20 @@ function _ref_lines(ref, op)
 	return r isa AbstractSeries ? expand(r) : nothing
 end
 
+function _op_lines(ops, x::AbstractArray, ref, label, xfrom, periods)
+	out = LabeledSeries[]
+	for op in _expand_ops(ops)
+		xlines = _lines(x, label, xfrom)
+		reflines = _need_ref(op) ? _lines(_ref_value(ref, op), label, xfrom) : nothing
+		for (i, s) in enumerate(xlines)
+			r = reflines === nothing ? ref : reflines[i].y
+			line_label = length(xlines) == 1 ? label : s.label
+			push!(out, _filter_periods(LabeledSeries(s.x, _transform(op, s.y, r), _op_label(line_label, op)), periods))
+		end
+	end
+	return out
+end
+
 function _op_lines(ops, x, ref, label, xfrom, periods)
 	out = LabeledSeries[]
 	for op in _expand_ops(ops)
@@ -188,7 +220,7 @@ _series_expr(item, dbv, refv, periodv, ops, oplines_ref) = begin
 	bases = _collect_bases(item)
 	cands = Expr(:tuple, Any[_rewrite(b, dbv) for b in bases]...)
 	ref = _ref_expr(item, refv)
-	:($oplines_ref($ops, $(_rewrite(item, dbv)), $ref, $(string(item)), $cands, $periodv))
+	:($oplines_ref($ops, $(_value_expr(item, dbv, periodv)), $ref, $(_label_text(item)), $cands, $periodv))
 end
 
 function _series_arg(expr, dbv, refv, periodv, ops, oplines_ref)
@@ -223,7 +255,8 @@ A multi-dimensional variable fans out into one line per leading-index combinatio
 
 Bare identifiers are treated as variables of `db`; use `\$(value)` to inject
 values from the surrounding scope (e.g. `@plot db qGDP / \$base`). Arithmetic
-operators are applied elementwise.
+operators are broadcast implicitly; named calls (e.g. `sum`, `log`) are left as
+written, so use explicit dots like `log.(x)` for elementwise functions.
 """
 macro plot(args...)
 	ops, db, ref, expr, use_defaults, periods = _macro_parts(args)

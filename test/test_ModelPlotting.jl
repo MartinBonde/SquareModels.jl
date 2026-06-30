@@ -32,6 +32,7 @@ JuMP.@variables model begin
 	x
 	p[[:hh, :firm], 2020:2021]
 	q[[:hh, :firm], 2020:2021]
+	L[[:cognitive, :physical], 2020:2021]
 end
 
 baseline = ModelDictionary(model)
@@ -40,6 +41,12 @@ for h in [:hh, :firm], t in 2020:2021
 	baseline[p[h, t]] = h == :hh ? t - 2019 : 10 * (t - 2019)
 	baseline[q[h, t]] = h == :hh ? 2 : 3
 end
+labor = [:cognitive, :physical]
+l = labor
+t = 2020:2021
+for l in labor, t in 2020:2021
+	baseline[L[l, t]] = l == :cognitive ? t - 2019 : 10 * (t - 2019)
+end
 
 shock = ModelDictionary(model)
 shock[x] = 4
@@ -47,13 +54,23 @@ for h in [:hh, :firm], t in 2020:2021
 	shock[p[h, t]] = 2 * baseline[p[h, t]]
 	shock[q[h, t]] = baseline[q[h, t]]
 end
+for l in labor, t in 2020:2021
+	shock[L[l, t]] = 2 * baseline[L[l, t]]
+end
 
 @testset "Model expression evaluation" begin
 	@test @evalexpr(baseline, x) == 3
 	@test @evalexpr(baseline, p[:hh, 2020] * q[:hh, 2020]) == 2
 	@test (@evalexpr baseline p[:hh, 2020] * q[:hh, 2020]) == 2
-	@test @evalexpr(baseline, p[:firm, :] * q[:firm, :]) == [30, 60]
-	@test @evalexpr(baseline, p * q) == [2 4; 30 60]
+	@test Array(@evalexpr(baseline, p[:firm, :] * q[:firm, :])) == [30, 60]
+	@test Array(@evalexpr(baseline, p * q)) == [2 4; 30 60]
+	@test Array(@evalexpr(baseline, p[:firm, :] / p[:firm, 2020])) == [1.0, 2.0]
+	@test Array(@evalexpr(baseline, p[:firm, :] .* q[:firm, :])) == [30, 60]
+	@test Array(@evalexpr(baseline, p .* q)) == [2 4; 30 60]
+	@test Array(@evalexpr(baseline, (@. p * q))) == [2 4; 30 60]
+	@test Array(@prt(baseline, (@. p * q))) == [2 4; 30 60]
+	@test Array(@evalexpr(baseline, sum([L[l, :] for l in l]))) == [11, 22]
+	@test Array(@evalexpr(baseline, sum(L[l, :] for l in l))) == [11, 22]
 	@test @prt(baseline, [x, p[:hh, 2021] * q[:hh, 2021]]) == [3, 4]
 	fq = 2
 	@test @prt(baseline, p[:hh, 2021] * q[:hh, 2021] / fq) == 2.0
@@ -61,7 +78,7 @@ end
 	@test isequal(@prt(:p, baseline, p[:hh, :]), [NaN, 100.0])
 	@test @prt(:m, (shock, baseline), p[:hh, :]) == [1.0, 2.0]
 	@test @prt(:q, (shock, baseline), p[:hh, :]) == [100.0, 100.0]
-	@test isequal(@evalexpr([:n, :p], baseline, p[:hh, :]), [[1, 2], [NaN, 100.0]])
+	@test isequal(map(Array, @evalexpr([:n, :p], baseline, p[:hh, :])), [[1, 2], [NaN, 100.0]])
 	@test (@evalexpr :q (shock, baseline) p[:hh, :]) == [100.0, 100.0]
 	series = @plot :q (shock, baseline) p[:hh, :]
 	@test length(series) == 1
@@ -76,13 +93,45 @@ end
 	@test series[2].label == "p[firm] <p>"
 	@test series[2].x == [2020, 2021]
 	@test isequal(series[2].y, [NaN, 100.0])
+	series = @plot baseline p .* q
+	@test length(series) == 2
+	@test series[1].label == "p .* q[hh]"
+	@test series[1].x == [2020, 2021]
+	@test series[1].y == [2.0, 4.0]
+	@test series[2].label == "p .* q[firm]"
+	@test series[2].x == [2020, 2021]
+	@test series[2].y == [30.0, 60.0]
+	series = @plot baseline p * q
+	@test length(series) == 2
+	@test series[1].label == "p * q[hh]"
+	@test series[1].x == [2020, 2021]
+	@test series[1].y == [2.0, 4.0]
+	@test series[2].label == "p * q[firm]"
+	@test series[2].y == [30.0, 60.0]
+	series = @plot baseline (@. p * q)
+	@test length(series) == 2
+	@test series[1].label == "(*).(p, q)[hh]"
+	@test series[1].x == [2020, 2021]
+	@test series[1].y == [2.0, 4.0]
+	@test series[2].label == "(*).(p, q)[firm]"
+	@test series[2].y == [30.0, 60.0]
 	series = @plot :q (shock, baseline) p
 	@test length(series) == 2
 	@test series[1].y == [100.0, 100.0]
 	@test series[2].y == [100.0, 100.0]
+	series = @plot :q (shock, baseline) sum([L[l, t] for l in l])
+	@test length(series) == 1
+	@test series[1].label == "sum([L[l, t] for l = l]) <q>"
+	@test series[1].x == [2020, 2021]
+	@test series[1].y == [100.0, 100.0]
+	series = @plot :q (shock, baseline) sum(L[l, t] for l in l)
+	@test length(series) == 1
+	@test series[1].label == "sum((L[l, t] for l = l)) <q>"
+	@test series[1].x == [2020, 2021]
+	@test series[1].y == [100.0, 100.0]
 
 	set_default_source!(baseline)
-	@test @prt(p[:hh, :]) == [1, 2]
+	@test Array(@prt(p[:hh, :])) == [1, 2]
 	@test isequal(@prt(:p, p[:hh, :]), [NaN, 100.0])
 	@test isequal((@prt :p p[:hh, :]), [NaN, 100.0])
 
@@ -111,10 +160,10 @@ end
 	set_default_source!(baseline)
 	set_default_operator!(:n)
 	set_default_periods!(2021:2021)
-	@test @prt(p[:hh, :]) == [2]
+	@test Array(@prt(p[:hh, :])) == [2]
 	@test @prt(p[:hh, 2020]) == 1
-	@test (@prt 2020:2020 p[:hh, :]) == [1]
-	@test (@prt 2021:2021 baseline p[:hh, :]) == [2]
+	@test Array(@prt 2020:2020 p[:hh, :]) == [1]
+	@test Array(@prt 2021:2021 baseline p[:hh, :]) == [2]
 	series = @plot p
 	@test length(series) == 2
 	@test series[1].x == [2021]
