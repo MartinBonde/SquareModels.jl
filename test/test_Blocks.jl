@@ -101,6 +101,54 @@ end
 	end
 end
 
+@testset "@block rejects stray block expressions" begin
+	@test_throws LoadError @eval let m = Model()
+		JuMP.@variables m begin
+			x
+			q
+		end
+		@block m begin
+			x, x == 1
+				+ q
+		end
+	end
+
+	@test_throws LoadError @eval let m = Model()
+		@variable(m, x[1:2])
+		@block m begin
+			x[t], x[t]
+		end
+	end
+
+	@test_throws LoadError @eval let m = Model()
+		JuMP.@variables m begin
+			x
+			q
+		end
+		@block m begin
+			x, x == 1, q
+		end
+	end
+
+	@test_throws Meta.ParseError Meta.parse("""
+		@block m begin
+			x[t], x[t] ==
+		end
+	""")
+
+	@test_throws Meta.ParseError Meta.parse("""
+		@block m begin
+			x[t],
+		end
+	""")
+
+	@test_throws Meta.ParseError Meta.parse("""
+		@block m begin
+			// wrong comment
+		end
+	""")
+end
+
 @testset "@block" begin
 	m = Model(Ipopt.Optimizer)
 	set_silent(m)

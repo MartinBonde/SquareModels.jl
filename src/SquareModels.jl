@@ -809,6 +809,10 @@ end
 See also: [`Block`](@ref), [`@endo_exo_swap!`](@ref), [`constraints`](@ref), [`endogenous`](@ref), [`variables`](@ref)
 """
 macro block(model, expr)
+	_error(line_number, it, msg) = error(
+		"Invalid @block expression at $(line_number.file):$(line_number.line): $msg. Got $(sprint(show, it)).",
+	)
+	_is_equality(it) = isexpr(it, :call) && length(it.args) == 3 && it.args[1] == :(==)
 	sm = @__MODULE__
 	block_macro_ref = GlobalRef(sm, Symbol("@_block"))
 	get_model_ref = GlobalRef(sm, :_get_model)
@@ -822,6 +826,8 @@ macro block(model, expr)
 	    if isa(it, LineNumberNode)
 	        line_number = it
 	    elseif isexpr(it, :tuple) # line with commas
+	        length(it.args) == 2 || _error(line_number, it, "Each line must be `variable, equation`")
+	        _is_equality(it.args[2]) || _error(line_number, it, "The equation must use `==`")
 	        macro_call = Expr(
 	            :macrocall,
 	            block_macro_ref,
@@ -830,6 +836,8 @@ macro block(model, expr)
 	            it.args...,
 	        )
 	        push!(code.args, esc(macro_call))
+	    else
+	        _error(line_number, it, "Unexpected code in block body")
 	    end
 	end
 	quote
