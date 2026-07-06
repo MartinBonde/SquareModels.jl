@@ -8,7 +8,7 @@ A JuMP extension for writing modular models with square systems of equations
 module SquareModels
 
 export @block, Block, Equation, @endo_exo_swap!, @variables, add_equation, add_equation!
-export endogenous, residuals, variables, exogenous, is_endogenous, overlaps, shared_endogenous
+export endogenous, residuals, residual, variables, exogenous, is_endogenous, overlaps, shared_endogenous
 export VariableRef  # Re-exported from JuMP for macro hygiene
 export ModelDictionary, fix, unfix, set_start_value, value, value_dict, add_missing_model_variables!
 export keys_match, assert_no_diff, assert_residuals_small
@@ -884,6 +884,15 @@ end
 """Return base name of JuMP variable"""
 base_name(var::AbstractVariableRef) = split_name(var)[1]
 base_name(var::AbstractArray{T}) where {T<:AbstractVariableRef} = base_name(first(var))
+
+"""
+    residual(var)
+
+Return the residual variable or residual container corresponding to an endogenous
+variable or variable container.
+"""
+residual(var) = first(var).model[Symbol(make_residual_name(base_name(var)))]
+residual(var::AbstractVariableRef) = var.model[Symbol(make_residual_name(base_name(var)))]
 
 """
 If a variable Symbol(new_name) does not exist, define a new variable with the same indices as an existing variable.

@@ -1,6 +1,7 @@
 module TestUtils
 
 using Test
+using SquareModels
 include("../src/utils.jl")
 
 @testset "Test @replace_vars" begin
@@ -27,6 +28,5 @@ end
   @test @m(x, s, b) ≈ 0.1
   @test @m(x+y, s, b) ≈ 0.3
 end
-
 
 end # Module

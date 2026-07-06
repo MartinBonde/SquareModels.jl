@@ -1076,11 +1076,22 @@ function assert_no_diff(a::ModelDictionary, b::ModelDictionary; atol::Real=1e-6,
 	return true
 end
 
-_excluded_base_name(v::AbstractVariableRef) = base_name(v)
-_excluded_base_name(s::AbstractString) = String(s)
+_residual_tolerance(::Nothing, r::AbstractVariableRef, atol::Real) = Float64(atol)
+function _source_name(r::AbstractVariableRef)
+	base, indices = split_name(r)
+	source_base = base[1:end - length(RESIDUAL_SUFFIX)]
+	return source_base * indices
+end
+
+function _residual_tolerance(tolerances::ModelDictionary, r::AbstractVariableRef, atol::Real)
+	tol = tolerances[r]
+	isnothing(tol) || return Float64(tol)
+	tol = tolerances[_source_name(r)]
+	isnothing(tol) ? Float64(atol) : Float64(tol)
+end
 
 """
-	assert_residuals_small(data::ModelDictionary; atol=1e-6, msg="", exclude=())
+	assert_residuals_small(data::ModelDictionary; atol=1e-6, msg="", tolerances=nothing)
 
 Assert that every residual variable in the model is negligible (`|value| <= atol`).
 
@@ -1088,13 +1099,13 @@ Residual variables are identified by `RESIDUAL_SUFFIX` (see [`residuals`](@ref))
 After a successful solve they should all be ~0; a large residual indicates an
 equation that is not satisfied by the data/solution.
 
-`exclude` is a collection of residuals that are *allowed* to be nonzero (e.g.
-calibration residuals that intentionally absorb data discrepancies). Each element
-may be a `VariableRef` or a base-name `String`; matching is done on base name, so
-all indexed instances sharing that base name are excluded.
+`tolerances` may be a `ModelDictionary` with per-residual overrides. Entries set
+by exact residual keys override only those residuals; otherwise the corresponding
+endogenous/source-variable key is used. Entries set to `nothing` fall back to
+`atol`. Use `Inf` as the tolerance for residuals that are intentionally unchecked.
 
 Residuals with a `nothing` value are skipped. Throws an error listing the
-offending residuals (sorted by magnitude) if any exceed `atol`; returns `true`
+offending residuals (sorted by magnitude) if any exceed their tolerance; returns `true`
 otherwise.
 
 # Example
@@ -1104,15 +1115,14 @@ assert_residuals_small(baseline; atol=1e-6, msg="Large residuals after solve")
 
 See also: [`assert_no_diff`](@ref), [`residuals`](@ref)
 """
-function assert_residuals_small(data::ModelDictionary; atol::Real=1e-6, msg::String="", exclude=())
-	excluded = Set(_excluded_base_name(e) for e in exclude)
-	violations = Tuple{String, Float64}[]
+function assert_residuals_small(data::ModelDictionary; atol::Real=1e-6, msg::String="", tolerances::Union{Nothing, ModelDictionary}=nothing)
+	violations = Tuple{String, Float64, Float64}[]
 	for r in residuals(data.model)
-		base_name(r) in excluded && continue
 		v = data[r]
 		isnothing(v) && continue
 		abs_v = abs(v)
-		abs_v > atol && push!(violations, (name(r), abs_v))
+		tol = _residual_tolerance(tolerances, r, atol)
+		abs_v > tol && push!(violations, (name(r), abs_v, tol))
 	end
 	if !isempty(violations)
 		sort!(violations, by=x -> -x[2])

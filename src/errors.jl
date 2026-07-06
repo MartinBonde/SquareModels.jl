@@ -30,11 +30,11 @@ abstract type SquareModelError <: Exception end
 	ResidualError <: SquareModelError
 
 Thrown by [`assert_residuals_small`](@ref) when one or more residual variables
-exceed the tolerance. `violations` holds `(name, |value|)` pairs sorted by
-descending magnitude.
+exceed the tolerance. `violations` holds `(name, |value|, tolerance)` tuples
+sorted by descending magnitude.
 """
 struct ResidualError <: SquareModelError
-	violations::Vector{Tuple{String, Float64}}
+	violations::Vector{Tuple{String, Float64, Float64}}
 	atol::Float64
 	msg::String
 end
@@ -42,8 +42,8 @@ end
 function Base.showerror(io::IO, e::ResidualError)
 	isempty(e.msg) || print(io, e.msg, "\n")
 	print(io, "$(length(e.violations)) residuals exceed atol=$(e.atol):")
-	for (k, v) in e.violations
-		print(io, "\n  $(k): |value|=$(v)")
+	for (k, v, tol) in e.violations
+		print(io, "\n  $(k): |value|=$(v), tolerance=$(tol)")
 	end
 end
 

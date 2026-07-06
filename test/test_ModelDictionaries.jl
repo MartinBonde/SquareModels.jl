@@ -1063,4 +1063,34 @@ end
 	end
 end
 
+@testset "Test residual tolerance overrides" begin
+	model = Model()
+	JuMP.@variables model begin
+		x
+		x_J
+		y[1:2]
+		y_J[1:2]
+	end
+
+	data = ModelDictionary(model)
+	data[x_J] = 2.0
+	data[y_J] = [0.2, 1.5]
+	tolerances = ModelDictionary(model)
+	tolerances[x] = 2.0
+	tolerances[y] = [0.2, 1.5]
+
+	@test_throws ResidualError assert_residuals_small(data; atol=0.1)
+	@test assert_residuals_small(data; atol=0.1, tolerances)
+
+	data[y_J[2]] = 1.6
+	@test_throws ResidualError assert_residuals_small(data; atol=0.1, tolerances)
+
+	data[y_J] = [1.6, 0.0]
+	tolerances[y] = nothing
+	tolerances[y_J[2]] = 2.0
+	@test_throws ResidualError assert_residuals_small(data; atol=0.1, tolerances)
+	tolerances[y] = Inf
+	@test assert_residuals_small(data; atol=0.1, tolerances)
+end
+
 end # module
