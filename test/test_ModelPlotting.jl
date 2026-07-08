@@ -96,7 +96,10 @@ end
 	@test occursin("baseline", printed_pair)
 	@test occursin("shock", printed_pair)
 	@test occursin("p[:hh, :]", printed_pair)
+	# Narrow width forces the 34-char label to wrap across two rows of 24 chars.
+	set_column_label_total_width!(48)
 	long_print = sprint(show, MIME"text/plain"(), @prt((baseline=>shock, baseline), p[:hh, :] * q[:hh, :] + p[:hh, :]))
+	set_column_label_total_width!(72)
 	@test !occursin("p[:hh, :] * q[:hh, :] + p[:hh, :]", long_print)
 	@test occursin("p[:hh, :] *", long_print)
 	@test occursin("q[:hh, :] +", long_print)
