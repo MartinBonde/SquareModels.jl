@@ -6,7 +6,6 @@ using Base.Meta: isexpr
 using JuMP: JuMP
 using PrettyTables: pretty_table
 import ..Window
-import .._labeled_table
 
 export @evalexpr, @prt, LabeledArray, MultiVarResult
 export set_default_source!, set_default_operator!, set_default_periods!, reset_print_defaults!
@@ -30,7 +29,7 @@ LabeledArray(data::AbstractArray, dims) = LabeledArray(Array(data), Tuple(dims))
 Base.size(a::LabeledArray) = size(a.data)
 Base.getindex(a::LabeledArray, i...) = getindex(a.data, i...)
 
-Base.show(io::IO, ::MIME"text/plain", a::LabeledArray) = _labeled_table(io, a.data, a.dims, nothing)
+Base.show(io::IO, ::MIME"text/plain", a::LabeledArray) = _period_row_table(io, a.data, a.dims)
 Base.show(io::IO, a::LabeledArray) = show(io, MIME"text/plain"(), a)
 
 """Axis label collections for `x`, or `nothing` when `x` carries no labels."""
@@ -76,15 +75,34 @@ _data_of(x::Window) = x.shaped_view
 _data_of(x::AbstractArray) = Array(x)
 _data_of(x::Number) = [x]
 
+_leading_combos(dims) = length(dims) == 1 ? [()] : vec(collect(Iterators.product(dims[1:end-1]...)))
+_column_label(name, combo) = isempty(combo) ? name : (isempty(name) ? join(combo, ", ") : "$name[$(join(combo, ", "))]")
+
+function _period_row_table(io::IO, data, dims, name="")
+	periods = collect(dims[end])
+	combos = _leading_combos(dims)
+	mat = permutedims(reshape(data, length(combos), length(periods)))
+	pretty_table(io, mat;
+		column_labels=[_column_label(name, c) for c in combos],
+		row_labels=string.(periods),
+		stubhead_label="year")
+end
+
 function Base.show(io::IO, ::MIME"text/plain", r::MultiVarResult)
 	dims = _dims_of(first(r.values))
 	if dims !== nothing && all(v -> _dims_of(v) == dims, r.values)
-		mat = reduce(hcat, vec(_data_of(v)) for v in r.values)
 		if isempty(dims)
+			mat = reduce(hcat, vec(_data_of(v)) for v in r.values)
 			pretty_table(io, mat; column_labels=r.names)
 		else
-			combos = vec(collect(Iterators.product(dims...)))
-			pretty_table(io, mat; column_labels=r.names, row_labels=[join(c, ", ") for c in combos])
+			periods = collect(dims[end])
+			combos = _leading_combos(dims)
+			mats = [permutedims(reshape(_data_of(v), length(combos), length(periods))) for v in r.values]
+			labels = [_column_label(name, c) for (name, _) in zip(r.names, r.values) for c in combos]
+			pretty_table(io, reduce(hcat, mats);
+				column_labels=labels,
+				row_labels=string.(periods),
+				stubhead_label="year")
 		end
 	else
 		for (i, (name, v)) in enumerate(zip(r.names, r.values))
@@ -166,7 +184,7 @@ another `Pair` to set a separate reference for a source.
 """
 function set_default_source!(sources...)
 	isempty(sources) && error("expected at least one default source")
-	specs = _source_spec.(sources)
+	specs = [_source_spec(source, i) for (i, source) in enumerate(sources)]
 	DEFAULT_SPECS[] = specs
 	return specs
 end
@@ -191,9 +209,9 @@ function reset_print_defaults!()
 	return nothing
 end
 
-_source_spec(source) = (; source, reference=source)
-_source_spec(pair::Pair) = (; source=pair.second, reference=pair.first)
-_source_spec(::Union{AbstractVector,Tuple}) = error("pass multiple default sources as separate arguments; use `reference => source` when the reference differs")
+_source_spec(source, i) = (; source, reference=source, source_label="baseline$i", reference_label="baseline$i")
+_source_spec(pair::Pair, i) = (; source=pair.second, reference=pair.first, source_label="s$i", reference_label="baseline$i")
+_source_spec(::Union{AbstractVector,Tuple}, i) = error("pass multiple default sources as separate arguments; use `reference => source` when the reference differs")
 
 function _active_specs()
 	DEFAULT_SPECS[] === nothing && error("no default source set; use set_default_source!(db) or pass the source explicitly")
@@ -522,6 +540,14 @@ function _eval_macro(args)
 		specv = gensym(:spec)
 		default_specs_ref = GlobalRef(@__MODULE__, :_active_specs)
 		arg = _value_arg(expr, dbv, refv, periodv, ops, apply_ref)
+		group_result_ref = GlobalRef(@__MODULE__, :_group_result)
+		entry_type_ref = GlobalRef(@__MODULE__, :_GroupEntry)
+		expr_label = string(expr)
+		entry = :($entry_type_ref(
+			string(getproperty($specv, :source_label), ":", $expr_label),
+			$(esc(_value_expr(expr, dbv, periodv))),
+			string(getproperty($specv, :reference_label), ":", $expr_label),
+			$(esc(_value_expr(expr, refv, periodv)))))
 		return quote
 			let $specsv = $default_specs_ref(), $(esc(periodv)) = $period_arg
 				if length($specsv) == 1
@@ -529,9 +555,11 @@ function _eval_macro(args)
 						$(esc(arg))
 					end
 				else
-					Any[let $(esc(dbv)) = getproperty($specv, :source), $(esc(refv)) = getproperty($specv, :reference)
-						$(esc(arg))
-					end for $specv in $specsv]
+					$group_result_ref($(esc(ops)), $entry_type_ref[
+						let $(esc(dbv)) = getproperty($specv, :source), $(esc(refv)) = getproperty($specv, :reference)
+							$entry
+						end for $specv in $specsv
+					])
 				end
 			end
 		end

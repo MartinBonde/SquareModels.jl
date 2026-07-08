@@ -95,6 +95,13 @@ end
 	multi_db = @prt((baseline=>shock, baseline), p[:hh, :])
 	@test multi_db.names == ["baseline:p[:hh, :]", "shock:p[:hh, :]"]
 	@test multi_db == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(shock, p[:hh, :])))
+	multi_q = @prt(:q, (baseline=>baseline, baseline=>shock), p[:hh, :])
+	@test multi_q.names == ["baseline:p[:hh, :]", "shock:p[:hh, :]"]
+	@test multi_q == ([0.0, 0.0], [100.0, 100.0])
+	printed_p = sprint(show, MIME"text/plain"(), @prt(baseline, p))
+	@test occursin("year", printed_p)
+	@test occursin("hh", printed_p)
+	@test occursin("firm", printed_p)
 	series = @plot :q baseline=>shock p[:hh, :]
 	@test length(series) == 1
 	@test series[1].label == "p[:hh, :] <q>"
@@ -160,14 +167,18 @@ end
 	@test @prt(:q, p[:hh, :]) == [0.0, 0.0]
 
 	set_default_source!(baseline, baseline => shock)
-	@test @prt(:q, p[:hh, :]) == [[0.0, 0.0], [100.0, 100.0]]
+	default_multi = @prt(:q, p[:hh, :])
+	@test default_multi.names == ["baseline1:p[:hh, :]", "s2:p[:hh, :]"]
+	@test default_multi == ([0.0, 0.0], [100.0, 100.0])
 	series = @plot(:q, p[:hh, :])
 	@test length(series) == 2
 	@test series[1].y == [0.0, 0.0]
 	@test series[2].y == [100.0, 100.0]
 
 	set_default_source!(baseline => baseline, baseline => shock)
-	@test @evalexpr(:q, p[:hh, :]) == [[0.0, 0.0], [100.0, 100.0]]
+	default_pairs = @evalexpr(:q, p[:hh, :])
+	@test default_pairs.names == ["s1:p[:hh, :]", "s2:p[:hh, :]"]
+	@test default_pairs == ([0.0, 0.0], [100.0, 100.0])
 
 	@test_throws ErrorException set_default_source!([baseline => baseline, baseline => shock])
 	@test_throws ErrorException set_default_source!((baseline, shock))
