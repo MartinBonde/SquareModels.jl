@@ -4,10 +4,11 @@ module ModelExpressions
 
 using Base.Meta: isexpr
 using JuMP: JuMP
+using PrettyTables: pretty_table
 import ..Window
 import .._labeled_table
 
-export @evalexpr, @prt, LabeledArray
+export @evalexpr, @prt, LabeledArray, MultiVarResult
 export set_default_source!, set_default_operator!, set_default_periods!, reset_print_defaults!
 
 """
@@ -24,7 +25,7 @@ struct LabeledArray{T, N} <: AbstractArray{T, N}
 	data::Array{T, N}
 	dims::NTuple{N, Any}
 end
-LabeledArray(data::AbstractArray, dims) = LabeledArray(collect(data), Tuple(dims))
+LabeledArray(data::AbstractArray, dims) = LabeledArray(Array(data), Tuple(dims))
 
 Base.size(a::LabeledArray) = size(a.data)
 Base.getindex(a::LabeledArray, i...) = getindex(a.data, i...)
@@ -44,6 +45,111 @@ function _relabel(result::AbstractArray, x)
 	return LabeledArray(result, dims)
 end
 _relabel(result, x) = result
+
+"""
+    MultiVarResult(names, values)
+
+Result of printing several expressions together, e.g. `@prt data (qGDP, pGDP)`.
+Behaves like the underlying `values` tuple for equality, iteration, and
+indexing, but displays as a single PrettyTables.jl table with one column per
+name when every value carries matching axis labels (or is a scalar); falls
+back to printing each value under its own heading otherwise.
+"""
+struct MultiVarResult{T<:Tuple}
+	names::Vector{String}
+	values::T
+end
+
+Base.:(==)(a::MultiVarResult, b) = a.values == b
+Base.:(==)(a, b::MultiVarResult) = a == b.values
+Base.:(==)(a::MultiVarResult, b::MultiVarResult) = a.values == b.values
+Base.length(a::MultiVarResult) = length(a.values)
+Base.iterate(a::MultiVarResult, state...) = iterate(a.values, state...)
+Base.getindex(a::MultiVarResult, i) = a.values[i]
+
+_dims_of(x::LabeledArray) = x.dims
+_dims_of(::Number) = ()
+_dims_of(x) = _axis_labels(x)
+
+_data_of(x::LabeledArray) = x.data
+_data_of(x::Window) = x.shaped_view
+_data_of(x::AbstractArray) = Array(x)
+_data_of(x::Number) = [x]
+
+function Base.show(io::IO, ::MIME"text/plain", r::MultiVarResult)
+	dims = _dims_of(first(r.values))
+	if dims !== nothing && all(v -> _dims_of(v) == dims, r.values)
+		mat = reduce(hcat, vec(_data_of(v)) for v in r.values)
+		if isempty(dims)
+			pretty_table(io, mat; column_labels=r.names)
+		else
+			combos = vec(collect(Iterators.product(dims...)))
+			pretty_table(io, mat; column_labels=r.names, row_labels=[join(c, ", ") for c in combos])
+		end
+	else
+		for (i, (name, v)) in enumerate(zip(r.names, r.values))
+			i > 1 && println(io)
+			println(io, name, ":")
+			show(io, MIME"text/plain"(), v)
+		end
+	end
+end
+Base.show(io::IO, r::MultiVarResult) = show(io, MIME"text/plain"(), r)
+
+"""
+    _GroupEntry(source_label, source, reference_label, reference)
+
+One database (or `reference => source` pair) contributed to a `@prt`/`@evalexpr`
+call whose `db` argument is a `Pair` or a `Tuple` of sources/pairs, e.g.
+`@prt data (baseline=>shock1, baseline=>shock2)`. Carries the raw (untransformed)
+values so [`_group_result`](@ref) can decide, once per call, whether the active
+operator needs `reference` (and skip computing it if not).
+"""
+struct _GroupEntry
+	source_label::String
+	source::Any
+	reference_label::Union{String,Nothing}
+	reference::Any
+end
+
+"""Push `(name, val)` onto `names`/`vals` unless `name` is already present (keeps a shared reference, e.g. a common baseline, from being repeated as a column)."""
+function _push_unique!(names, vals, name, val)
+	name in names && return nothing
+	push!(names, name)
+	push!(vals, val)
+	return nothing
+end
+
+"""
+    _group_result(ops, entries::Vector{_GroupEntry})
+
+Turn the [`_GroupEntry`](@ref)s collected from a `Pair`/`Tuple` `db` argument
+into a display value. When `ops` needs a reference (e.g. `:q`, `:m`), each
+entry becomes one column of the transformed source (unwrapped to a bare value
+when there is only one); a `reference`-less entry then errors. Otherwise (e.g.
+the default `:n`), every distinct source and reference is shown as its own
+raw column in a [`MultiVarResult`](@ref), e.g. `baseline:qGDP, shock1:qGDP,
+shock2:qGDP` — a reference shared by several entries (like a common baseline)
+is only shown once.
+"""
+function _group_result(ops, entries::Vector{_GroupEntry})
+	needs = _group_needs_ref(ops)
+	names = String[]
+	vals = Any[]
+	for e in entries
+		if needs
+			e.reference === nothing && error("operator requires a reference source for $(e.source_label); use `reference => source`")
+			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, () -> e.reference))
+		elseif e.reference === nothing
+			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, nothing))
+		else
+			_push_unique!(names, vals, e.reference_label, _apply_ops(ops, e.reference, nothing))
+			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, nothing))
+		end
+	end
+	needs && length(vals) == 1 && return only(vals)
+	return MultiVarResult(names, Tuple(vals))
+end
 
 const DEFAULT_SPECS = Ref{Any}(nothing)
 const DEFAULT_OPERATOR = Ref{Any}(:n)
@@ -155,12 +261,15 @@ end
 
 function _ref_value(ref, op)
 	v = ref isa Function ? ref() : ref
-	v === nothing && _need_ref(op) && error("operator :$op requires a reference source, e.g. @prt :$op (shock, baseline) x")
+	v === nothing && _need_ref(op) && error("operator :$op requires a reference source, e.g. @prt :$op baseline=>shock x")
 	return v
 end
 
+"""Whether any operator in `ops` (after expanding aliases like `:a`) needs a reference source."""
+_group_needs_ref(ops) = any(_need_ref, _expand_ops(ops))
+
 function _transform(op::Symbol, x, ref=nothing)
-	op in (:n, :abs) && return x
+	op in (:n, :abs) && return _relabel(x, x)
 	op in (:d, :dif) && return _relabel(_dif(x), x)
 	op in (:p, :pch) && return _relabel(_pch(x), x)
 	op in (:dp, :gdif) && return _relabel(_gdif(x), x)
@@ -317,6 +426,12 @@ function _value_arg(expr, dbv, refv, periodv, ops, apply_ref)
 		items = Any[_value_arg(it, dbv, refv, periodv, ops, apply_ref) for it in expr.args]
 		return Expr(:vect, items...)
 	end
+	if isexpr(expr, :tuple) && length(expr.args) > 1
+		items = Any[_value_arg(it, dbv, refv, periodv, ops, apply_ref) for it in expr.args]
+		names = String[string(it) for it in expr.args]
+		multivar_ref = GlobalRef(@__MODULE__, :MultiVarResult)
+		return :($multivar_ref($names, ($(items...),)))
+	end
 	ref = _ref_expr(expr, refv, periodv)
 	return :($apply_ref($ops, $(_value_expr(expr, dbv, periodv)), $ref))
 end
@@ -342,9 +457,56 @@ function _macro_parts(args)
 	error("expected `expr`, `op expr`, `periods expr`, `db expr`, `op db expr`, or `op periods db expr`")
 end
 
+"""`reference => source` pair, e.g. `baseline => shock`, as used to supply a reference database."""
+_is_pair_expr(x) = isexpr(x, :call) && length(x.args) == 3 && x.args[1] === :(=>)
+
 function _db_parts(db, ref)
-	isexpr(db, :tuple) && length(db.args) == 2 && return (db.args[1], db.args[2])
+	_is_pair_expr(db) && return (db.args[3], db.args[2])
 	return (db, ref)
+end
+
+"""
+    _group_entry_expr(el, expr, periodv)
+
+Build the `(bindings, entry)` pair for one element `el` of a `db` group (either
+a plain source expression or a `reference => source` pair): `bindings` are
+`let`-bindings for the gensym'd database variable(s), and `entry` constructs
+the corresponding [`_GroupEntry`](@ref) evaluating `expr` against them.
+"""
+function _group_entry_expr(el, expr, periodv)
+	entry_ref = GlobalRef(@__MODULE__, :_GroupEntry)
+	dbv = gensym(:db)
+	if _is_pair_expr(el)
+		refexpr, srcexpr = el.args[2], el.args[3]
+		refv = gensym(:ref)
+		bindings = [:($(esc(dbv)) = $(esc(srcexpr))), :($(esc(refv)) = $(esc(refexpr)))]
+		src_label = "$(string(srcexpr)):$(string(expr))"
+		ref_label = "$(string(refexpr)):$(string(expr))"
+		entry = esc(:($entry_ref($src_label, $(_value_expr(expr, dbv, periodv)), $ref_label, $(_value_expr(expr, refv, periodv)))))
+	else
+		bindings = [:($(esc(dbv)) = $(esc(el)))]
+		src_label = "$(string(el)):$(string(expr))"
+		entry = esc(:($entry_ref($src_label, $(_value_expr(expr, dbv, periodv)), nothing, nothing)))
+	end
+	return bindings, entry
+end
+
+"""Build the `@prt`/`@evalexpr` body for a `db` argument that is a `Pair` or a `Tuple` of sources/pairs (see [`_group_result`](@ref))."""
+function _group_macro(dbargs, expr, ops, period_arg, periodv)
+	bindings = Any[]
+	entries = Any[]
+	for el in dbargs
+		bs, entry = _group_entry_expr(el, expr, periodv)
+		append!(bindings, bs)
+		push!(entries, entry)
+	end
+	group_result_ref = GlobalRef(@__MODULE__, :_group_result)
+	entry_type_ref = GlobalRef(@__MODULE__, :_GroupEntry)
+	return quote
+		let $(bindings...), $(esc(periodv)) = $period_arg
+			$group_result_ref($(esc(ops)), $entry_type_ref[$(entries...)])
+		end
+	end
 end
 
 function _eval_macro(args)
@@ -374,6 +536,10 @@ function _eval_macro(args)
 			end
 		end
 	end
+	if _is_pair_expr(db) || (isexpr(db, :tuple) && length(db.args) >= 2)
+		dbargs = isexpr(db, :tuple) ? db.args : Any[db]
+		return _group_macro(dbargs, expr, ops, period_arg, periodv)
+	end
 	primary, ref = _db_parts(db, ref)
 	refv = ref === nothing ? nothing : refv
 	arg = _value_arg(expr, dbv, refv, periodv, ops, apply_ref)
@@ -396,8 +562,17 @@ end
     @evalexpr periods expr
     @evalexpr op periods expr
     @evalexpr ops db [expr1, expr2, ...]
+    @evalexpr op reference=>source expr
+    @evalexpr op (source1, reference=>source2, ...) expr
 
 Evaluate one or more model expressions, resolving bare names against `db`.
+
+Use `reference => source` in place of `db` to supply a reference for operators
+that need one (e.g. `:q`, `:m`); `db` alone (no operator that needs a
+reference) or a `Tuple` of sources/pairs instead evaluate `expr` against each
+database and return a [`MultiVarResult`](@ref) with one column per database
+(a reference shared by several pairs, e.g. a common baseline, is only shown
+once).
 """
 macro evalexpr(args...)
 	return _eval_macro(args)
@@ -409,6 +584,8 @@ end
     @prt periods expr
     @prt op periods expr
     @prt ops db [expr1, expr2, ...]
+    @prt op reference=>source expr
+    @prt op (source1, reference=>source2, ...) expr
 
 Evaluate a model expression for display in the REPL. This is an alias for
 [`@evalexpr`](@ref), so the returned value is what gets printed by the caller.
