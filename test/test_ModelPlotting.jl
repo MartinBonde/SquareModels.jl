@@ -209,6 +209,15 @@ end
 	set_default_source!(baseline)
 	set_default_operator!(:n)
 	set_default_periods!(2021:2021)
+	set_default_source!(baseline => shock)
+	@test @prt(:m, p[:hh, :]) == [2.0]
+	series = @plot :m p[:hh, :]
+	@test length(series) == 1
+	@test series[1].x == [2021]
+	@test series[1].y == [2.0]
+	series = @plot :q p[:hh, :]
+	@test series[1].y == [100.0]
+	set_default_source!(baseline)
 	@test Array(@prt(p[:hh, :])) == [2]
 	@test @prt(p[:hh, 2020]) == 1
 	@test Array(@prt 2020:2020 p[:hh, :]) == [1]

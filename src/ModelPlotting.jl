@@ -219,7 +219,7 @@ end
 _series_expr(item, dbv, refv, periodv, ops, oplines_ref) = begin
 	bases = _collect_bases(item)
 	cands = Expr(:tuple, Any[_rewrite(b, dbv) for b in bases]...)
-	ref = _ref_expr(item, refv)
+	ref = _ref_expr(item, refv, periodv)
 	:($oplines_ref($ops, $(_value_expr(item, dbv, periodv)), $ref, $(_label_text(item)), $cands, $periodv))
 end
 
