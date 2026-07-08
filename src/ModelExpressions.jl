@@ -8,28 +8,29 @@ using PrettyTables: pretty_table
 import ..Window
 
 export @evalexpr, @prt, LabeledArray, MultiVarResult
-export set_default_source!, set_default_operator!, set_default_periods!, reset_print_defaults!
+export set_default_source!, set_default_operator!, set_default_periods!, set_column_label_total_width!, reset_print_defaults!
 
 """
     LabeledArray(data, dims)
 
 A thin `AbstractArray` wrapper that behaves exactly like `data` for indexing,
 equality, and `Array` conversion, but remembers the per-dimension labels in
-`dims` (e.g. `([:hh, :firm], 2020:2021)`) purely for display. `@prt`/`@evalexpr`
-wrap transformed multi-dimensional results in one of these so they still print
-as a table (rows from the leading dimensions, columns from the last) instead
-of a bare, unlabelled matrix.
+`dims` (e.g. `([:hh, :firm], 2020:2021)`) and an optional expression `name`
+purely for display. `@prt`/`@evalexpr` wrap transformed multi-dimensional
+results in one of these so they still print as a table (rows from the leading
+dimensions, columns from the last) instead of a bare, unlabelled matrix.
 """
 struct LabeledArray{T, N} <: AbstractArray{T, N}
 	data::Array{T, N}
 	dims::NTuple{N, Any}
+	name::String
 end
-LabeledArray(data::AbstractArray, dims) = LabeledArray(Array(data), Tuple(dims))
+LabeledArray(data::AbstractArray, dims, name="") = LabeledArray(Array(data), Tuple(dims), name)
 
 Base.size(a::LabeledArray) = size(a.data)
 Base.getindex(a::LabeledArray, i...) = getindex(a.data, i...)
 
-Base.show(io::IO, ::MIME"text/plain", a::LabeledArray) = _period_row_table(io, a.data, a.dims)
+Base.show(io::IO, ::MIME"text/plain", a::LabeledArray) = _period_row_table(io, a.data, a.dims, a.name)
 Base.show(io::IO, a::LabeledArray) = show(io, MIME"text/plain"(), a)
 
 """Axis label collections for `x`, or `nothing` when `x` carries no labels."""
@@ -38,12 +39,12 @@ _axis_labels(x::Window) = axes(x.indices)
 _axis_labels(_) = nothing
 
 """Wrap `result` in a [`LabeledArray`](@ref) using `x`'s axis labels, when available."""
-function _relabel(result::AbstractArray, x)
+function _relabel(result::AbstractArray, x, name="")
 	dims = _axis_labels(x)
 	(dims === nothing || ndims(result) != length(dims)) && return result
-	return LabeledArray(result, dims)
+	return LabeledArray(result, dims, name)
 end
-_relabel(result, x) = result
+_relabel(result, x, name="") = result
 
 """
     MultiVarResult(names, values)
@@ -75,15 +76,47 @@ _data_of(x::Window) = x.shaped_view
 _data_of(x::AbstractArray) = Array(x)
 _data_of(x::Number) = [x]
 
+const _COLUMN_LABEL_MIN_WIDTH = 10
+const DEFAULT_COLUMN_LABEL_TOTAL_WIDTH = Ref(72)
+
+_table_label(source, expr) = string(source, '\n', _expr_label(expr))
+
 _leading_combos(dims) = length(dims) == 1 ? [()] : vec(collect(Iterators.product(dims[1:end-1]...)))
 _column_label(name, combo) = isempty(combo) ? name : (isempty(name) ? join(combo, ", ") : "$name[$(join(combo, ", "))]")
+
+function _source_expr_parts(name)
+	parts = split(name, '\n', limit=2)
+	length(parts) == 1 && return nothing
+	return (parts[1], parts[2])
+end
+
+_column_label_width(ncols) = max(_COLUMN_LABEL_MIN_WIDTH, DEFAULT_COLUMN_LABEL_TOTAL_WIDTH[] ÷ max(ncols, 1))
+
+function _wrap_label(label, width)
+	isempty(label) && return [""]
+	n = length(label)
+	n <= width && return [label]
+	return [label[i:min(i + width - 1, n)] for i in 1:width:n]
+end
+
+# PrettyTables `auto_wrap` crops column labels with an ellipsis rather than
+# adding label rows, and `line_breaks` does not split `\n` inside labels.
+function _column_labels(labels)
+	splits = _source_expr_parts.(labels)
+	width = _column_label_width(length(labels))
+	wrapped = [_wrap_label(isnothing(s) ? label : s[2], width) for (label, s) in zip(labels, splits)]
+	n = maximum(length, wrapped)
+	rows = [[i <= length(w) ? w[i] : "" for w in wrapped] for i in 1:n]
+	any(!isnothing, splits) && pushfirst!(rows, [isnothing(s) ? "" : s[1] for s in splits])
+	return rows
+end
 
 function _period_row_table(io::IO, data, dims, name="")
 	periods = collect(dims[end])
 	combos = _leading_combos(dims)
 	mat = permutedims(reshape(data, length(combos), length(periods)))
 	pretty_table(io, mat;
-		column_labels=[_column_label(name, c) for c in combos],
+		column_labels=_column_labels([_column_label(name, c) for c in combos]),
 		row_labels=string.(periods),
 		stubhead_label="year")
 end
@@ -93,21 +126,21 @@ function Base.show(io::IO, ::MIME"text/plain", r::MultiVarResult)
 	if dims !== nothing && all(v -> _dims_of(v) == dims, r.values)
 		if isempty(dims)
 			mat = reduce(hcat, vec(_data_of(v)) for v in r.values)
-			pretty_table(io, mat; column_labels=r.names)
+			pretty_table(io, mat; column_labels=_column_labels(r.names))
 		else
 			periods = collect(dims[end])
 			combos = _leading_combos(dims)
 			mats = [permutedims(reshape(_data_of(v), length(combos), length(periods))) for v in r.values]
 			labels = [_column_label(name, c) for (name, _) in zip(r.names, r.values) for c in combos]
 			pretty_table(io, reduce(hcat, mats);
-				column_labels=labels,
+				column_labels=_column_labels(labels),
 				row_labels=string.(periods),
 				stubhead_label="year")
 		end
 	else
 		for (i, (name, v)) in enumerate(zip(r.names, r.values))
 			i > 1 && println(io)
-			println(io, name, ":")
+			println(io, name)
 			show(io, MIME"text/plain"(), v)
 		end
 	end
@@ -157,12 +190,12 @@ function _group_result(ops, entries::Vector{_GroupEntry})
 	for e in entries
 		if needs
 			e.reference === nothing && error("operator requires a reference source for $(e.source_label); use `reference => source`")
-			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, () -> e.reference))
+			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, () -> e.reference, e.source_label))
 		elseif e.reference === nothing
-			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, nothing))
+			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, nothing, e.source_label))
 		else
-			_push_unique!(names, vals, e.reference_label, _apply_ops(ops, e.reference, nothing))
-			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, nothing))
+			_push_unique!(names, vals, e.reference_label, _apply_ops(ops, e.reference, nothing, e.reference_label))
+			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, nothing, e.source_label))
 		end
 	end
 	needs && length(vals) == 1 && return only(vals)
@@ -186,19 +219,24 @@ function set_default_source!(sources...)
 	isempty(sources) && error("expected at least one default source")
 	specs = [_source_spec(source, i) for (i, source) in enumerate(sources)]
 	DEFAULT_SPECS[] = specs
-	return specs
+	return nothing
 end
 
 """Set the default operator used when no operator is given."""
 function set_default_operator!(op)
 	DEFAULT_OPERATOR[] = op
-	return op
 end
 
 """Set the default final-dimension periods used by `@prt`, `@evalexpr`, and `@plot`."""
 function set_default_periods!(periods)
 	DEFAULT_PERIODS[] = periods
-	return periods
+end
+
+"""Set the total character budget shared across `@prt` column labels when wrapping."""
+function set_column_label_total_width!(width::Integer)
+	width < _COLUMN_LABEL_MIN_WIDTH && error("column label total width must be at least $_COLUMN_LABEL_MIN_WIDTH")
+	DEFAULT_COLUMN_LABEL_TOTAL_WIDTH[] = width
+	return nothing
 end
 
 """Clear interactive print/plot defaults."""
@@ -206,6 +244,7 @@ function reset_print_defaults!()
 	DEFAULT_SPECS[] = nothing
 	DEFAULT_OPERATOR[] = :n
 	DEFAULT_PERIODS[] = nothing
+	DEFAULT_COLUMN_LABEL_TOTAL_WIDTH[] = 72
 	return nothing
 end
 
@@ -286,30 +325,30 @@ end
 """Whether any operator in `ops` (after expanding aliases like `:a`) needs a reference source."""
 _group_needs_ref(ops) = any(_need_ref, _expand_ops(ops))
 
-function _transform(op::Symbol, x, ref=nothing)
-	op in (:n, :abs) && return _relabel(x, x)
-	op in (:d, :dif) && return _relabel(_dif(x), x)
-	op in (:p, :pch) && return _relabel(_pch(x), x)
-	op in (:dp, :gdif) && return _relabel(_gdif(x), x)
-	op == :l && return _relabel(_log(x), x)
-	op == :dl && return _relabel(_ldif(x), x)
+function _transform(op::Symbol, x, ref=nothing, name="")
+	op in (:n, :abs) && return _relabel(x, x, name)
+	op in (:d, :dif) && return _relabel(_dif(x), x, name)
+	op in (:p, :pch) && return _relabel(_pch(x), x, name)
+	op in (:dp, :gdif) && return _relabel(_gdif(x), x, name)
+	op == :l && return _relabel(_log(x), x, name)
+	op == :dl && return _relabel(_ldif(x), x, name)
 	ref = _ref_value(ref, op)
-	op == :m && return _relabel(_as_numeric(x) .- _as_numeric(ref), x)
-	op == :q && return _relabel((_as_numeric(x) ./ _as_numeric(ref) .- 1) .* 100, x)
-	op == :mp && return _relabel(_pch(x) .- _pch(ref), x)
+	op == :m && return _relabel(_as_numeric(x) .- _as_numeric(ref), x, name)
+	op == :q && return _relabel((_as_numeric(x) ./ _as_numeric(ref) .- 1) .* 100, x, name)
+	op == :mp && return _relabel(_pch(x) .- _pch(ref), x, name)
 	op in (:r, :rn) && return ref
-	op == :rd && return _relabel(_dif(ref), ref)
-	op == :rp && return _relabel(_pch(ref), ref)
-	op == :rdp && return _relabel(_gdif(ref), ref)
-	op == :rl && return _relabel(_log(ref), ref)
-	op == :rdl && return _relabel(_ldif(ref), ref)
+	op == :rd && return _relabel(_dif(ref), ref, name)
+	op == :rp && return _relabel(_pch(ref), ref, name)
+	op == :rdp && return _relabel(_gdif(ref), ref, name)
+	op == :rl && return _relabel(_log(ref), ref, name)
+	op == :rdl && return _relabel(_ldif(ref), ref, name)
 	error("unknown print operator :$op")
 end
 
-function _apply_ops(ops, x, ref=nothing)
+function _apply_ops(ops, x, ref=nothing, name="")
 	os = _expand_ops(ops)
-	length(os) == 1 && return _transform(only(os), x, ref)
-	return Any[_transform(op, x, ref) for op in os]
+	length(os) == 1 && return _transform(only(os), x, ref, name)
+	return Any[_transform(op, x, ref, name) for op in os]
 end
 
 _op_label(label, op) = op == :n ? label : "$label <$op>"
@@ -331,6 +370,52 @@ _period_ref(base, periods, indices...) = periods === nothing ? base[indices...] 
 const _DOT_OPS = (:+, :-, :*, :/, :^, :%, :\)
 _is_dot_macro(ex) = isexpr(ex, :macrocall) && ex.args[1] === Symbol("@__dot__")
 _expand_dot_macro(ex) = _is_dot_macro(ex) ? macroexpand(@__MODULE__, ex) : ex
+
+# `string(expr)` parenthesizes nested non-associative operators
+# ("((x - x) - x) - x"), so we re-print arithmetic ourselves with minimal parens.
+const _UNARY_PREC = Base.operator_precedence(:^) - 1  # unary minus: tighter than :*, looser than :^
+
+_stripdot(op::Symbol) = (s = string(op); length(s) > 1 && s[1] == '.' ? Symbol(s[2:end]) : op)
+
+function _format_index(arg)
+	arg isa QuoteNode && return _format_index(arg.value)
+	arg isa Symbol && return arg === :(:) ? ":" : ":$arg"
+	return _expr_label(arg)
+end
+
+_paren(s, prec, min_prec) = prec < min_prec ? "($s)" : s
+
+function _expr_label(ex, min_prec=0)
+	ex isa QuoteNode && return _expr_label(ex.value, min_prec)
+	ex isa Expr || return string(ex)
+	ex = _expand_dot_macro(ex)
+	if ex.head === :call
+		op, args = ex.args[1], ex.args[2:end]
+		base_op = op isa Symbol ? _stripdot(op) : op
+		if base_op in (:+, :-) && length(args) == 1
+			return _paren(string(op, _expr_label(args[1], _UNARY_PREC)), _UNARY_PREC, min_prec)
+		end
+		if base_op isa Symbol && length(args) >= 2 && base_op in (:+, :-, :*, :/, :\, :%, :^)
+			prec = Base.operator_precedence(base_op)
+			rassoc = base_op === :^
+			parts = [_expr_label(a, i == (rassoc ? length(args) : 1) ? prec : prec + 1)
+				for (i, a) in enumerate(args)]
+			s = join(parts, base_op === :^ ? string(op) : " $op ")
+			return _paren(s, prec, min_prec)
+		end
+		return string(_expr_label(op), "(", join(_expr_label.(args), ", "), ")")
+	elseif ex.head === :ref
+		return string(_expr_label(ex.args[1]), "[", join(_format_index.(ex.args[2:end]), ", "), "]")
+	elseif ex.head === :.
+		field = ex.args[2] isa QuoteNode ? ex.args[2].value : _expr_label(ex.args[2])
+		return string(_expr_label(ex.args[1]), ".", field)
+	elseif ex.head === :tuple
+		return "(" * join(_expr_label.(ex.args), ", ") * ")"
+	elseif ex.head === :vect
+		return "[" * join(_expr_label.(ex.args), ", ") * "]"
+	end
+	return string(ex)
+end
 
 function _model_binding_expr(dbv, name::Symbol, periodv=nothing)
 	lookup_ref = GlobalRef(@__MODULE__, :_lookup)
@@ -446,12 +531,13 @@ function _value_arg(expr, dbv, refv, periodv, ops, apply_ref)
 	end
 	if isexpr(expr, :tuple) && length(expr.args) > 1
 		items = Any[_value_arg(it, dbv, refv, periodv, ops, apply_ref) for it in expr.args]
-		names = String[string(it) for it in expr.args]
+		names = String[_expr_label(it) for it in expr.args]
 		multivar_ref = GlobalRef(@__MODULE__, :MultiVarResult)
 		return :($multivar_ref($names, ($(items...),)))
 	end
 	ref = _ref_expr(expr, refv, periodv)
-	return :($apply_ref($ops, $(_value_expr(expr, dbv, periodv)), $ref))
+	expr_name = _expr_label(expr)
+	return :($apply_ref($ops, $(_value_expr(expr, dbv, periodv)), $ref, $expr_name))
 end
 
 _is_op_literal(x::QuoteNode) = x.value isa Symbol
@@ -498,12 +584,12 @@ function _group_entry_expr(el, expr, periodv)
 		refexpr, srcexpr = el.args[2], el.args[3]
 		refv = gensym(:ref)
 		bindings = [:($(esc(dbv)) = $(esc(srcexpr))), :($(esc(refv)) = $(esc(refexpr)))]
-		src_label = "$(string(srcexpr)):$(string(expr))"
-		ref_label = "$(string(refexpr)):$(string(expr))"
+		src_label = _table_label(string(srcexpr), expr)
+		ref_label = _table_label(string(refexpr), expr)
 		entry = esc(:($entry_ref($src_label, $(_value_expr(expr, dbv, periodv)), $ref_label, $(_value_expr(expr, refv, periodv)))))
 	else
 		bindings = [:($(esc(dbv)) = $(esc(el)))]
-		src_label = "$(string(el)):$(string(expr))"
+		src_label = _table_label(string(el), expr)
 		entry = esc(:($entry_ref($src_label, $(_value_expr(expr, dbv, periodv)), nothing, nothing)))
 	end
 	return bindings, entry
@@ -542,11 +628,11 @@ function _eval_macro(args)
 		arg = _value_arg(expr, dbv, refv, periodv, ops, apply_ref)
 		group_result_ref = GlobalRef(@__MODULE__, :_group_result)
 		entry_type_ref = GlobalRef(@__MODULE__, :_GroupEntry)
-		expr_label = string(expr)
+		expr_label = _expr_label(expr)
 		entry = :($entry_type_ref(
-			string(getproperty($specv, :source_label), ":", $expr_label),
+			string(getproperty($specv, :source_label), '\n', $expr_label),
 			$(esc(_value_expr(expr, dbv, periodv))),
-			string(getproperty($specv, :reference_label), ":", $expr_label),
+			string(getproperty($specv, :reference_label), '\n', $expr_label),
 			$(esc(_value_expr(expr, refv, periodv)))))
 		return quote
 			let $specsv = $default_specs_ref(), $(esc(periodv)) = $period_arg

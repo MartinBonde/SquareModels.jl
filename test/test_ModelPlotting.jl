@@ -90,18 +90,38 @@ end
 	@test @prt(op, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
 	pair_print = @prt(baseline=>shock, p[:hh, :])
 	@test pair_print == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(shock, p[:hh, :])))
-	@test occursin("baseline:p[:hh, :]", sprint(show, MIME"text/plain"(), pair_print))
-	@test occursin("shock:p[:hh, :]", sprint(show, MIME"text/plain"(), pair_print))
+	printed_pair = sprint(show, MIME"text/plain"(), pair_print)
+	@test !occursin("baseline:p[:hh, :]", printed_pair)
+	@test !occursin("shock:p[:hh, :]", printed_pair)
+	@test occursin("baseline", printed_pair)
+	@test occursin("shock", printed_pair)
+	@test occursin("p[:hh, :]", printed_pair)
+	long_print = sprint(show, MIME"text/plain"(), @prt((baseline=>shock, baseline), p[:hh, :] * q[:hh, :] + p[:hh, :]))
+	@test !occursin("p[:hh, :] * q[:hh, :] + p[:hh, :]", long_print)
+	@test occursin("p[:hh, :] *", long_print)
+	@test occursin("q[:hh, :] +", long_print)
+	@test SquareModels.ModelExpressions._column_label_width(1) == 72
+	@test SquareModels.ModelExpressions._column_label_width(2) > SquareModels.ModelExpressions._column_label_width(8)
+	set_column_label_total_width!(100)
+	@test SquareModels.ModelExpressions._column_label_width(1) == 100
+	set_column_label_total_width!(72)
 	multi_db = @prt((baseline=>shock, baseline), p[:hh, :])
-	@test multi_db.names == ["baseline:p[:hh, :]", "shock:p[:hh, :]"]
+	@test multi_db.names == ["baseline\np[:hh, :]", "shock\np[:hh, :]"]
 	@test multi_db == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(shock, p[:hh, :])))
 	multi_q = @prt(:q, (baseline=>baseline, baseline=>shock), p[:hh, :])
-	@test multi_q.names == ["baseline:p[:hh, :]", "shock:p[:hh, :]"]
+	@test multi_q.names == ["baseline\np[:hh, :]", "shock\np[:hh, :]"]
 	@test multi_q == ([0.0, 0.0], [100.0, 100.0])
 	printed_p = sprint(show, MIME"text/plain"(), @prt(baseline, p))
 	@test occursin("year", printed_p)
 	@test occursin("hh", printed_p)
 	@test occursin("firm", printed_p)
+	printed_slice = sprint(show, MIME"text/plain"(), @prt(baseline, p[:hh, :]))
+	@test occursin("p[:hh, :]", printed_slice)
+	long_print = sprint(show, MIME"text/plain"(), @prt(:m, baseline => shock, p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :]))
+	@test !occursin("p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :]", long_print)
+	@test occursin("p[:hh, :]", long_print)
+	@test !occursin("(", long_print)
+	@test SquareModels.ModelExpressions._expr_label(:(a + b - c + d)) == "a + b - c + d"
 	series = @plot :q baseline=>shock p[:hh, :]
 	@test length(series) == 1
 	@test series[1].label == "p[:hh, :] <q>"
@@ -168,7 +188,7 @@ end
 
 	set_default_source!(baseline, baseline => shock)
 	default_multi = @prt(:q, p[:hh, :])
-	@test default_multi.names == ["baseline1:p[:hh, :]", "s2:p[:hh, :]"]
+	@test default_multi.names == ["baseline1\np[:hh, :]", "s2\np[:hh, :]"]
 	@test default_multi == ([0.0, 0.0], [100.0, 100.0])
 	series = @plot(:q, p[:hh, :])
 	@test length(series) == 2
@@ -177,7 +197,7 @@ end
 
 	set_default_source!(baseline => baseline, baseline => shock)
 	default_pairs = @evalexpr(:q, p[:hh, :])
-	@test default_pairs.names == ["s1:p[:hh, :]", "s2:p[:hh, :]"]
+	@test default_pairs.names == ["s1\np[:hh, :]", "s2\np[:hh, :]"]
 	@test default_pairs == ([0.0, 0.0], [100.0, 100.0])
 
 	@test_throws ErrorException set_default_source!([baseline => baseline, baseline => shock])
