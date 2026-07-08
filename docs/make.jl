@@ -9,7 +9,7 @@ makedocs(;
     sitename="SquareModels.jl",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
-        edit_link="main",
+        edit_link="master",
     ),
     pages=[
         "Home" => "index.md",
@@ -30,7 +30,7 @@ makedocs(;
 if haskey(ENV, "GITHUB_REPOSITORY")
     deploydocs(;
         repo="github.com/$(ENV["GITHUB_REPOSITORY"]).git",
-        devbranch="main",
+        devbranch="master",
         push_preview=true,
     )
 end
