@@ -1093,4 +1093,47 @@ end
 	@test assert_residuals_small(data; atol=0.1, tolerances)
 end
 
+@testset "Test residual relative tolerance" begin
+	# rtol rescues a residual that's small relative to a large source variable
+	model = Model()
+	JuMP.@variables model begin
+		x
+		x_J
+	end
+	data = ModelDictionary(model)
+	data[x] = 1000.0
+	data[x_J] = 5.0  # 0.5% of x
+
+	@test_throws ResidualError assert_residuals_small(data; atol=0.1)
+	@test assert_residuals_small(data; atol=0.1, rtol=0.01)  # threshold = max(0.1, 0.01*1000) = 10
+
+	# rtol doesn't rescue a residual when the source variable is ~0 (atol floor still applies)
+	model = Model()
+	JuMP.@variables model begin
+		z
+		z_J
+	end
+	data = ModelDictionary(model)
+	data[z] = 0.0
+	data[z_J] = 0.05
+
+	@test_throws ResidualError assert_residuals_small(data; atol=0.01, rtol=1.0)  # threshold = max(0.01, 1.0*0) = 0.01
+
+	# Per-residual rtol override via `rtolerances`, mirroring `tolerances`
+	model = Model()
+	JuMP.@variables model begin
+		y[1:2]
+		y_J[1:2]
+	end
+	data = ModelDictionary(model)
+	data[y] = [10.0, 1000.0]
+	data[y_J] = [0.5, 5.0]  # 5% of y[1]; 0.5% of y[2]
+
+	@test_throws ResidualError assert_residuals_small(data; atol=0.01, rtol=0.01)  # y_J[1]: 0.5 > max(0.01, 0.01*10)=0.1
+
+	rtolerances = ModelDictionary(model)
+	rtolerances[y[1]] = 0.1
+	@test assert_residuals_small(data; atol=0.01, rtol=0.01, rtolerances)  # y_J[1]: 0.5 <= max(0.01, 0.1*10)=1.0
+end
+
 end # module

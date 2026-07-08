@@ -1076,57 +1076,75 @@ function assert_no_diff(a::ModelDictionary, b::ModelDictionary; atol::Real=1e-6,
 	return true
 end
 
-_residual_tolerance(::Nothing, r::AbstractVariableRef, atol::Real) = Float64(atol)
+_residual_tolerance(::Nothing, r::AbstractVariableRef, default::Real) = Float64(default)
 function _source_name(r::AbstractVariableRef)
 	base, indices = split_name(r)
 	source_base = base[1:end - length(RESIDUAL_SUFFIX)]
 	return source_base * indices
 end
 
-function _residual_tolerance(tolerances::ModelDictionary, r::AbstractVariableRef, atol::Real)
+"""Look up a per-residual override in `tolerances` (exact residual key first, then
+source-variable key), falling back to `default` (used for both `atol` and `rtol`
+overrides via `tolerances`/`rtolerances`)."""
+function _residual_tolerance(tolerances::ModelDictionary, r::AbstractVariableRef, default::Real)
 	tol = tolerances[r]
 	isnothing(tol) || return Float64(tol)
 	tol = tolerances[_source_name(r)]
-	isnothing(tol) ? Float64(atol) : Float64(tol)
+	isnothing(tol) ? Float64(default) : Float64(tol)
 end
 
 """
-	assert_residuals_small(data::ModelDictionary; atol=1e-6, msg="", tolerances=nothing)
+	assert_residuals_small(data::ModelDictionary; atol=1e-6, rtol=0.0, msg="", tolerances=nothing, rtolerances=nothing)
 
-Assert that every residual variable in the model is negligible (`|value| <= atol`).
+Assert that every residual variable in the model is negligible relative to a
+combined absolute/relative threshold: `|residual| <= max(atol, rtol * |variable|)`,
+where `variable` is the endogenous/source variable the residual corresponds to
+(same combination rule as Julia's `isapprox(atol=, rtol=)`, and as
+[`assert_no_diff`](@ref)). This avoids the usual pitfall of relative tolerances
+blowing up when the reference value is near zero: `atol` alone governs there.
 
 Residual variables are identified by `RESIDUAL_SUFFIX` (see [`residuals`](@ref)).
 After a successful solve they should all be ~0; a large residual indicates an
 equation that is not satisfied by the data/solution.
 
-`tolerances` may be a `ModelDictionary` with per-residual overrides. Entries set
-by exact residual keys override only those residuals; otherwise the corresponding
-endogenous/source-variable key is used. Entries set to `nothing` fall back to
-`atol`. Use `Inf` as the tolerance for residuals that are intentionally unchecked.
+`tolerances`/`rtolerances` may be `ModelDictionary`s with per-residual overrides
+for `atol`/`rtol` respectively. Entries set by exact residual keys override only
+those residuals; otherwise the corresponding endogenous/source-variable key is
+used. Entries set to `nothing` fall back to `atol`/`rtol`. Use `Inf` as the
+tolerance for residuals that are intentionally unchecked.
 
-Residuals with a `nothing` value are skipped. Throws an error listing the
-offending residuals (sorted by magnitude) if any exceed their tolerance; returns `true`
-otherwise.
+Residuals with a `nothing` value are skipped, as are relative comparisons when
+the corresponding source variable has a `nothing` value. Throws an error listing
+the offending residuals (sorted by magnitude) if any exceed their tolerance;
+returns `true` otherwise.
 
 # Example
 ```julia
 assert_residuals_small(baseline; atol=1e-6, msg="Large residuals after solve")
+
+# Allow residuals up to 0.1% of the corresponding variable's size, with a 1e-6 floor
+assert_residuals_small(baseline; atol=1e-6, rtol=1e-3)
 ```
 
 See also: [`assert_no_diff`](@ref), [`residuals`](@ref)
 """
-function assert_residuals_small(data::ModelDictionary; atol::Real=1e-6, msg::String="", tolerances::Union{Nothing, ModelDictionary}=nothing)
+function assert_residuals_small(data::ModelDictionary; atol::Real=1e-6, rtol::Real=0.0, msg::String="", tolerances::Union{Nothing, ModelDictionary}=nothing, rtolerances::Union{Nothing, ModelDictionary}=nothing)
 	violations = Tuple{String, Float64, Float64}[]
 	for r in residuals(data.model)
 		v = data[r]
 		isnothing(v) && continue
 		abs_v = abs(v)
 		tol = _residual_tolerance(tolerances, r, atol)
+		rtol_r = _residual_tolerance(rtolerances, r, rtol)
+		if rtol_r > 0
+			base = data[_source_name(r)]
+			isnothing(base) || (tol = max(tol, rtol_r * abs(base)))
+		end
 		abs_v > tol && push!(violations, (name(r), abs_v, tol))
 	end
 	if !isempty(violations)
 		sort!(violations, by=x -> -x[2])
-		throw(ResidualError(violations, Float64(atol), msg))
+		throw(ResidualError(violations, Float64(atol), Float64(rtol), msg))
 	end
 	return true
 end
