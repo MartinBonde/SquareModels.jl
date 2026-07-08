@@ -5,6 +5,7 @@ using Dictionaries
 using Parquet2
 using DataFrames
 using CSV
+using PrettyTables: pretty_table
 
 """
     ModelDictionary
@@ -269,36 +270,40 @@ _key_to_tuple(k::CartesianIndex) = Tuple(k)
 _key_to_tuple(k::Tuple) = k
 _key_to_tuple(k) = (k,)
 
+"""
+    _combo_label(varname, combo)
+
+Row label for a leading-index combination, e.g. `_combo_label("p", (:hh, 2020))
+== "p[hh, 2020]"`. An empty `combo` (1-D data) falls back to the bare `varname`.
+"""
+_combo_label(varname, combo) = isempty(combo) ? varname :
+	(isempty(varname) ? join(combo, ", ") : "$varname[$(join(combo, ", "))]")
+
+"""
+    _labeled_table(io, data, dims, varname)
+
+Print `data` (shaped like `length.(dims)`) as a table via PrettyTables.jl: all
+but the last dimension of `dims` collapse into row labels (e.g.
+`varname[hh, 2020]`), the last dimension becomes the column headers. This is
+the shared renderer behind `Window`'s display and `@prt`'s labelled results.
+"""
+function _labeled_table(io::IO, data::AbstractArray, dims::Tuple, varname)
+	name = varname === nothing ? "" : string(varname)
+	rowdims = dims[1:end-1]
+	combos = vec(collect(Iterators.product(rowdims...)))
+	pretty_table(io, reshape(data, length(combos), length(dims[end]));
+		column_labels=string.(collect(dims[end])),
+		row_labels=[_combo_label(name, c) for c in combos],
+		stubhead_label=name)
+end
+
 function Base.show(io::IO, ::MIME"text/plain", w::Window)
 	n = length(w)
 	ax = axes(w.indices)
-	# Header with variable name if available
-	varname_str = w.varname === nothing ? "" : string(w.varname)
-	if length(ax) == 1
-		print(io, n, "-element Window")
-	else
-		print(io, join(length.(ax), "×"), " Window")
-	end
+	print(io, length(ax) == 1 ? "$n-element" : join(length.(ax), "×"), " Window")
 	n == 0 && return
 	println(io, ":")
-	# Get keys - for DenseAxisArray this gives the actual index values
-	ks = collect(keys(w.indices))
-	max_show = get(io, :limit, false) ? 10 : n
-	half = max_show ÷ 2
-	for (i, k) in enumerate(ks)
-		if n > max_show && i == half + 1
-			println(io, " ⋮")
-			continue
-		elseif n > max_show && half < i < n - half + 1
-			continue
-		end
-		# Format key with variable name: varname[k1, k2, ...] or varname[k]
-		k_tuple = _key_to_tuple(k)
-		idx_str = "[" * join(k_tuple, ", ") * "]"
-		key_str = varname_str * idx_str
-		print(io, " ", key_str, " => ", w.data_view[w.indices[k_tuple...]])
-		i < n && println(io)
-	end
+	_labeled_table(io, w.shaped_view, ax, w.varname)
 end
 Base.show(io::IO, w::Window) = show(io, MIME"text/plain"(), w)
 

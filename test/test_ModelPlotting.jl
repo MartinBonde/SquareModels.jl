@@ -75,12 +75,34 @@ end
 	fq = 2
 	@test @prt(baseline, p[:hh, 2021] * q[:hh, 2021] / fq) == 2.0
 	@test @prt(baseline, (p[:hh, 2021] * q[:hh, 2021], p[:firm, 2021] * q[:firm, 2020] / fq)) == (4, 30.0)
+	multi = @prt(baseline, (p[:hh, :], p[:firm, :]))
+	@test multi == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(baseline, p[:firm, :])))
+	@test occursin("p[:hh, :]", sprint(show, MIME"text/plain"(), multi))
+	@test occursin("p[:firm, :]", sprint(show, MIME"text/plain"(), multi))
+	@test Array(@prt(baseline, p)) == [1.0 2.0; 10.0 20.0]
+	@test occursin("2020", sprint(show, MIME"text/plain"(), @prt(baseline, p)))
 	@test isequal(@prt(:p, baseline, p[:hh, :]), [NaN, 100.0])
-	@test @prt(:m, (shock, baseline), p[:hh, :]) == [1.0, 2.0]
-	@test @prt(:q, (shock, baseline), p[:hh, :]) == [100.0, 100.0]
+	@test @prt(:m, baseline=>shock, p[:hh, :]) == [1.0, 2.0]
+	@test @prt(:q, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
 	@test isequal(map(Array, @evalexpr([:n, :p], baseline, p[:hh, :])), [[1, 2], [NaN, 100.0]])
-	@test (@evalexpr :q (shock, baseline) p[:hh, :]) == [100.0, 100.0]
-	series = @plot :q (shock, baseline) p[:hh, :]
+	@test (@evalexpr :q baseline=>shock p[:hh, :]) == [100.0, 100.0]
+	op = :q
+	@test @prt(op, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
+	pair_print = @prt(baseline=>shock, p[:hh, :])
+	@test pair_print == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(shock, p[:hh, :])))
+	@test occursin("baseline:p[:hh, :]", sprint(show, MIME"text/plain"(), pair_print))
+	@test occursin("shock:p[:hh, :]", sprint(show, MIME"text/plain"(), pair_print))
+	multi_db = @prt((baseline=>shock, baseline), p[:hh, :])
+	@test multi_db.names == ["baseline:p[:hh, :]", "shock:p[:hh, :]"]
+	@test multi_db == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(shock, p[:hh, :])))
+	multi_q = @prt(:q, (baseline=>baseline, baseline=>shock), p[:hh, :])
+	@test multi_q.names == ["baseline:p[:hh, :]", "shock:p[:hh, :]"]
+	@test multi_q == ([0.0, 0.0], [100.0, 100.0])
+	printed_p = sprint(show, MIME"text/plain"(), @prt(baseline, p))
+	@test occursin("year", printed_p)
+	@test occursin("hh", printed_p)
+	@test occursin("firm", printed_p)
+	series = @plot :q baseline=>shock p[:hh, :]
 	@test length(series) == 1
 	@test series[1].label == "p[:hh, :] <q>"
 	@test series[1].x == [2020, 2021]
@@ -115,16 +137,16 @@ end
 	@test series[1].y == [2.0, 4.0]
 	@test series[2].label == "(*).(p, q)[firm]"
 	@test series[2].y == [30.0, 60.0]
-	series = @plot :q (shock, baseline) p
+	series = @plot :q baseline=>shock p
 	@test length(series) == 2
 	@test series[1].y == [100.0, 100.0]
 	@test series[2].y == [100.0, 100.0]
-	series = @plot :q (shock, baseline) sum([L[l, t] for l in l])
+	series = @plot :q baseline=>shock sum([L[l, t] for l in l])
 	@test length(series) == 1
 	@test series[1].label == "sum([L[l, t] for l = l]) <q>"
 	@test series[1].x == [2020, 2021]
 	@test series[1].y == [100.0, 100.0]
-	series = @plot :q (shock, baseline) sum(L[l, t] for l in l)
+	series = @plot :q baseline=>shock sum(L[l, t] for l in l)
 	@test length(series) == 1
 	@test series[1].label == "sum((L[l, t] for l = l)) <q>"
 	@test series[1].x == [2020, 2021]
@@ -145,14 +167,18 @@ end
 	@test @prt(:q, p[:hh, :]) == [0.0, 0.0]
 
 	set_default_source!(baseline, baseline => shock)
-	@test @prt(:q, p[:hh, :]) == [[0.0, 0.0], [100.0, 100.0]]
+	default_multi = @prt(:q, p[:hh, :])
+	@test default_multi.names == ["baseline1:p[:hh, :]", "s2:p[:hh, :]"]
+	@test default_multi == ([0.0, 0.0], [100.0, 100.0])
 	series = @plot(:q, p[:hh, :])
 	@test length(series) == 2
 	@test series[1].y == [0.0, 0.0]
 	@test series[2].y == [100.0, 100.0]
 
 	set_default_source!(baseline => baseline, baseline => shock)
-	@test @evalexpr(:q, p[:hh, :]) == [[0.0, 0.0], [100.0, 100.0]]
+	default_pairs = @evalexpr(:q, p[:hh, :])
+	@test default_pairs.names == ["s1:p[:hh, :]", "s2:p[:hh, :]"]
+	@test default_pairs == ([0.0, 0.0], [100.0, 100.0])
 
 	@test_throws ErrorException set_default_source!([baseline => baseline, baseline => shock])
 	@test_throws ErrorException set_default_source!((baseline, shock))

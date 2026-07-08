@@ -8,6 +8,7 @@ Manifest.toml
 *.mps
 *.nl
 *.bson
+docs/build/
 
 # Development work (not ready for public release)
 dev/

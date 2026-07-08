@@ -10,6 +10,13 @@ Large-scale macroeconomic models are typically "square" — each equation determ
 - **Build models modularly** — Define separate `Block`s of equations that can be combined
 - **Swap endogenous/exogenous variables** — Use `@endo_exo_swap!` to change which variables are endogenous for calibration or counterfactual scenarios
 
+## Documentation
+
+Documentation is built with [Documenter.jl](https://github.com/JuliaDocs/Documenter.jl)
+from the `docs/` directory. It includes dedicated pages for getting started,
+core concepts, solving, plotting and printing, modular models, optimization, and
+the API reference.
+
 ## Quick Example
 
 > 📄 Full runnable version: [`examples/quick_example.jl`](examples/quick_example.jl)
@@ -214,7 +221,7 @@ data[x[2025:2060]] .= 1.0
 data[y[:electric, 2025:2060]] .= 0.8
 ```
 
-The returned `Window` supports broadcasting (`.=`, `.*`, etc.) and iteration, but external libraries (e.g. Makie) may require `collect` or `Float64.()` to convert to a plain `Vector`. The `ModelPlotting` submodule (below) handles this conversion for you.
+The returned `Window` supports broadcasting (`.=`, `.*`, etc.) and iteration, but external libraries (e.g. Makie) may require `collect` or `Float64.()` to convert to a plain `Vector`. The `ModelPlotting` submodule (below) handles this conversion for you. At the REPL, a multi-dimensional `Window` displays as a table (rows for the leading indices, columns for the last dimension) via [PrettyTables.jl](https://github.com/ronisbr/PrettyTables.jl).
 
 ### Plotting and printing
 
@@ -251,9 +258,9 @@ save("gdp.png", fig)           # Makie's save; format inferred from extension
 # Evaluate or print the same expressions without plotting:
 @evalexpr data qGDP * pGDP
 @evalexpr data (@. qGDP * pGDP)
-@prt :p data qGDP[2020:2060]                  # percent growth
-@prt :q (scenario, baseline) qGDP[2020:2060]  # percent deviation from baseline
-@prt 2020:2060 qGDP                           # default source, selected periods
+@prt :p data qGDP[2020:2060]                # percent growth
+@prt :q baseline=>scenario qGDP[2020:2060]  # percent deviation from baseline
+@prt 2020:2060 qGDP                         # default source, selected periods
 
 # For interactive work, set defaults once and omit the source:
 set_default_source!(baseline => scenario)
@@ -262,6 +269,33 @@ set_default_periods!(2020:2060)
 @prt qGDP
 @plot qGDP
 reset_print_defaults!()
+
+# Multi-dimensional results print as a table (rows for the leading indices,
+# columns for the last dimension) via PrettyTables.jl, instead of a bare matrix.
+# This applies to every operator, including the default `:n` (raw values):
+@prt data emissions
+@prt :q baseline=>scenario emissions[2020:2060]
+#           2020    2021    …    2060
+# [region1]  1.2     1.3    …     2.1
+# [region2]  0.8     0.9    …     1.7
+
+# Multiple expressions in a tuple print together as columns of one table
+# (rows are the shared index, e.g. periods) instead of a plain Julia Tuple:
+@prt data (qGDP, pGDP)
+#        qGDP    pGDP
+# 2020    1.2     1.0
+# 2021    1.3     1.1
+
+# A `reference => source` pair (in place of a plain `db`) supplies the reference
+# for operators that need one, e.g. `:q` above. Without such an operator (or with
+# a `Tuple` of sources/pairs), the values from each database print side by side
+# instead, one column per database — a reference shared by several pairs (like a
+# common baseline) is only shown once:
+@prt baseline=>scenario qGDP[2020:2060]
+@prt (baseline=>shock1, baseline=>shock2) qGDP[2020:2060]
+#        baseline:qGDP    shock1:qGDP    shock2:qGDP
+# 2020        1.2             1.3            1.4
+# 2021        1.3             1.4            1.5
 
 # Multi-dimensional variables fan out into one line per leading index:
 @plot data emissions          # emissions[region, year] → one line per region
@@ -362,6 +396,7 @@ SquareModels/
 ├── ext/
 │   ├── SquareModelsMakieExt.jl      # Plotting via Makie (optional dep)
 │   └── SquareModelsGAMSExt.jl       # GAMS CONOPT solver support (optional dep)
+├── docs/                     # Documenter.jl documentation
 ├── examples/
 │   ├── quick_example.jl      # Simple labor market model
 │   ├── modular_example.jl    # Modular CGE model example

@@ -243,7 +243,7 @@ ModelDictionary `db` and labelling each series with its source text.
 ```julia
 @plot db qGDP                       # single variable
 @plot :p db qGDP                    # percentage growth
-@plot :q (shock, baseline) qGDP     # percent deviation from baseline
+@plot :q baseline=>shock qGDP       # percent deviation from baseline
 @plot 2020:2060 qGDP                # default source, limited to periods
 @plot db qGDP / qGDP[2019]          # normalised, label "qGDP / qGDP[2019]"
 @plot db [qGDP * pGDP, qGDP / qGDP[2019]]   # multiple series on one axis
