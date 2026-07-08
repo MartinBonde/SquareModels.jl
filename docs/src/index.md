@@ -42,7 +42,12 @@ using SquareModels
 
 ## Package Structure
 
-The main package lives in `src/SquareModels.jl`. Optional plotting support is
-implemented in `ext/SquareModelsMakieExt.jl`, which loads when a Makie backend is
-available. Runnable examples are available in the repository's `examples/`
-directory.
+The main package lives in `src/SquareModels.jl`. Optional features live in
+package extensions under `ext/` and load automatically when the corresponding
+package is present:
+
+- **Makie** — plotting support (`plotvar`, `@plot`, ...); load any backend, e.g. `CairoMakie`
+- **GAMS** — solve square systems with GAMS CNS solvers via `square_model(gamsdir=...)`
+- **GDXInterface** — `load` data from GAMS GDX files into a `ModelDictionary`
+
+Runnable examples are available in the repository's `examples/` directory.

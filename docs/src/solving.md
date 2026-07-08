@@ -71,6 +71,23 @@ solution = solve(block, data; start_values=baseline, replace_nothing=1.0)
 `replace_nothing` is useful during early calibration when a variable exists in
 the model but has no data value yet.
 
+## Choosing a Solver
+
+[`square_model`](@ref) constructs a JuMP model configured as a square nonlinear
+system (feasibility sense, no objective). Pass any JuMP optimizer, or use the
+`gamsdir` keyword to solve through GAMS as a constrained nonlinear system (CNS):
+
+```julia
+model = square_model(Ipopt.Optimizer; tol=1e-10)
+
+using GAMS  # loads the optional GAMS extension
+model = square_model(; gamsdir="C:/GAMS/53", solver="CONOPT4")
+```
+
+With the GAMS backend, `solve!` annotates the generated `moi.lst` listing with
+the model's variable and equation names (see [`annotate_lst!`](@ref)), which
+makes GAMS solver output readable for debugging.
+
 ## Diagnostics
 
 Before solving, SquareModels checks whether substituting exogenous data makes the

@@ -21,7 +21,13 @@ export SparseZeroArray, ∑, use_sparse_zero_array!
 export ModelExpressions, ModelPlotting, @plot, @evalexpr, @prt, plotvar, plotseries, labeled, LabeledSeries, LabeledArray, MultiVarResult, AbstractSeries
 export set_default_source!, set_default_operator!, set_default_periods!, set_column_label_total_width!, reset_print_defaults!
 
-RESIDUAL_SUFFIX = "_J"  # Suffix for residual variables (J for "junk" or adjustment)
+"""
+    RESIDUAL_SUFFIX
+
+Suffix appended to endogenous variable names to name their residual variables
+(default `"_J"`, J for "junk" or adjustment). See [`residuals`](@ref).
+"""
+RESIDUAL_SUFFIX = "_J"
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Blocks
@@ -222,7 +228,7 @@ for v in endogenous(b)
 end
 ```
 
-See also: [`constraints`](@ref), [`variables`](@ref), [`exogenous`](@ref)
+See also: [`variables`](@ref), [`exogenous`](@ref)
 """
 endogenous(b::Block) = b.endogenous
 
@@ -260,7 +266,7 @@ res = residuals(b)
 # res[1] is x_J, res[2:4] are y_J[1], y_J[2], y_J[3]
 ```
 
-See also: [`endogenous`](@ref), [`constraints`](@ref), [`residuals(::AbstractModel)`](@ref)
+See also: [`endogenous`](@ref), [`residuals(::AbstractModel)`](@ref)
 """
 residuals(b::Block) = b.residuals
 
@@ -806,7 +812,7 @@ b = @block model begin
 end
 ```
 
-See also: [`Block`](@ref), [`@endo_exo_swap!`](@ref), [`constraints`](@ref), [`endogenous`](@ref), [`variables`](@ref)
+See also: [`Block`](@ref), [`@endo_exo_swap!`](@ref), [`endogenous`](@ref), [`variables`](@ref)
 """
 macro block(model, expr)
 	_error(line_number, it, msg) = error(

@@ -46,14 +46,50 @@ be endogenous in the block and becomes exogenous data.
 container, and slice indexing:
 
 ```julia
-data[x] = 1.0
-data[y] = [1.0, 2.0, 3.0]
-data[y[2020:2030]] .= 1.0
+# Single value
+data[x[2025]]          # scalar
+
+# Vector of variable references — returns a Window (a view into the dictionary)
+data[x[2025:2060]]     # all periods
+data[x[[2025, 2030]]]  # selected periods
+
+# Multi-dimensional variables
+data[y[:electric, 2025:2060]]  # one fuel type, all periods
+data[y[:, 2025]]               # all fuel types, one period
+
+# Assignment works the same way
+data[x[2025:2060]] .= 1.0
+data[y[:electric, 2025:2060]] .= 0.8
 ```
 
 Indexing a variable container returns a `Window`, which behaves like a view into
 the dictionary and keeps the original model indices. That is what makes slices
-usable for printing and plotting.
+usable for printing and plotting. A `Window` supports broadcasting (`.=`, `.*`,
+etc.) and iteration, but external libraries may require `collect` or
+`Float64.()` to convert to a plain `Vector`. At the REPL, a multi-dimensional
+`Window` displays as a table (rows for the leading indices, columns for the last
+dimension) via PrettyTables.jl.
+
+## Loading and Saving Data
+
+[`unload`](@ref) saves a `ModelDictionary` to a Parquet file and [`load`](@ref)
+reads one back, matching values to the model's variables by name and indices:
+
+```julia
+unload("solution.parquet", baseline)
+baseline = load("solution.parquet", model)
+```
+
+`load` also reads CSV files and — with the optional GDXInterface extension
+(`using GDXInterface`) — GAMS GDX files. Renames and slices map differently
+named or higher-dimensional data symbols onto model variables:
+
+```julia
+d = load("data.gdx", model;
+    N = "nPop",           # simple rename
+    C = "vC[:cTot,:]",    # C[t] ← vC[:cTot, t]
+)
+```
 
 ## Variable Metadata
 

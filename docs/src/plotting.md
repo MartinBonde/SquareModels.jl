@@ -67,10 +67,13 @@ nothing
 
 ![](normalised.png)
 
-Use explicit dots for elementwise function calls:
+Arithmetic operators are broadcast implicitly, so `qGDP / qGDP[2020]` works
+elementwise. Named calls are left as written, so reductions stay reductions;
+write explicit dots for elementwise functions and explicit generators for sums:
 
 ```julia
 @plot data log.(qGDP)
+@plot data sum(qX[s, :] for s in sectors)
 ```
 
 For programmatic workflows, build series explicitly with [`labeled`](@ref) and
@@ -92,12 +95,49 @@ normalised_gdp = @evalexpr data qGDP / qGDP[2020]
 round.(normalised_gdp, digits=3)
 ```
 
-[`@prt`](@ref) prints values and transformations in a table-oriented format:
+[`@prt`](@ref) prints values and transformations in a table-oriented format. An
+optional operator symbol selects the transformation, e.g. `:p` for percent
+growth and `:q` for percent deviation from a reference:
 
 ```julia
 @prt data qGDP
-@prt :p data qGDP
-@prt :q baseline=>scenario qGDP
+@prt :p data qGDP[2020:2060]
+@prt :q baseline=>scenario qGDP[2020:2060]
+@prt 2020:2060 qGDP                         # default source, selected periods
+```
+
+A `reference => source` pair supplies the reference for operators that need one,
+like `:q` above. Without such an operator (or with a `Tuple` of sources/pairs),
+the values from each database print side by side instead, one column per
+database — a reference shared by several pairs (like a common baseline) is only
+shown once:
+
+```julia
+@prt baseline=>scenario qGDP[2020:2060]
+@prt (baseline=>shock1, baseline=>shock2) qGDP[2020:2060]
+#        baseline:qGDP    shock1:qGDP    shock2:qGDP
+# 2020        1.2             1.3            1.4
+# 2021        1.3             1.4            1.5
+```
+
+Multi-dimensional results print as a table (rows for the leading indices,
+columns for the last dimension) via PrettyTables.jl, instead of a bare matrix:
+
+```julia
+@prt data emissions
+#           2020    2021    …    2024
+# [north]   10.0     9.0    …     7.0
+# [south]    6.0     6.0    …     4.0
+```
+
+Multiple expressions in a tuple print together as columns of one table (rows are
+the shared index, e.g. periods) instead of a plain Julia `Tuple`:
+
+```julia
+@prt data (qGDP, qC)
+#        qGDP    qC
+# 2020    100    80
+# 2021    103    82
 ```
 
 For interactive work, set defaults once and omit the source:
