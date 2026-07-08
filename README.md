@@ -1,5 +1,8 @@
 # SquareModels
 
+[![CI](https://github.com/MartinBonde/SquareModels/actions/workflows/CI.yml/badge.svg)](https://github.com/MartinBonde/SquareModels/actions/workflows/CI.yml)
+[![codecov](https://codecov.io/gh/MartinBonde/SquareModels/branch/master/graph/badge.svg)](https://codecov.io/gh/MartinBonde/SquareModels)
+
 A JuMP extension for writing modular models with **square systems of equations** — systems where the number of constraints equals the number of endogenous variables.
 
 **Documentation: [martinbonde.github.io/SquareModels](https://martinbonde.github.io/SquareModels)**
