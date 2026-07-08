@@ -214,7 +214,7 @@ data[x[2025:2060]] .= 1.0
 data[y[:electric, 2025:2060]] .= 0.8
 ```
 
-The returned `Window` supports broadcasting (`.=`, `.*`, etc.) and iteration, but external libraries (e.g. Makie) may require `collect` or `Float64.()` to convert to a plain `Vector`. The `ModelPlotting` submodule (below) handles this conversion for you.
+The returned `Window` supports broadcasting (`.=`, `.*`, etc.) and iteration, but external libraries (e.g. Makie) may require `collect` or `Float64.()` to convert to a plain `Vector`. The `ModelPlotting` submodule (below) handles this conversion for you. At the REPL, a multi-dimensional `Window` displays as a table (rows for the leading indices, columns for the last dimension) via [PrettyTables.jl](https://github.com/ronisbr/PrettyTables.jl).
 
 ### Plotting and printing
 
@@ -262,6 +262,13 @@ set_default_periods!(2020:2060)
 @prt qGDP
 @plot qGDP
 reset_print_defaults!()
+
+# Multi-dimensional results print as a table (rows for the leading indices,
+# columns for the last dimension) via PrettyTables.jl, instead of a bare matrix:
+@prt :q (scenario, baseline) emissions[2020:2060]
+#           2020    2021    …    2060
+# [region1]  1.2     1.3    …     2.1
+# [region2]  0.8     0.9    …     1.7
 
 # Multi-dimensional variables fan out into one line per leading index:
 @plot data emissions          # emissions[region, year] → one line per region

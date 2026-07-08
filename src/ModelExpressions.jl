@@ -5,9 +5,45 @@ module ModelExpressions
 using Base.Meta: isexpr
 using JuMP: JuMP
 import ..Window
+import .._labeled_table
 
-export @evalexpr, @prt
+export @evalexpr, @prt, LabeledArray
 export set_default_source!, set_default_operator!, set_default_periods!, reset_print_defaults!
+
+"""
+    LabeledArray(data, dims)
+
+A thin `AbstractArray` wrapper that behaves exactly like `data` for indexing,
+equality, and `Array` conversion, but remembers the per-dimension labels in
+`dims` (e.g. `([:hh, :firm], 2020:2021)`) purely for display. `@prt`/`@evalexpr`
+wrap transformed multi-dimensional results in one of these so they still print
+as a table (rows from the leading dimensions, columns from the last) instead
+of a bare, unlabelled matrix.
+"""
+struct LabeledArray{T, N} <: AbstractArray{T, N}
+	data::Array{T, N}
+	dims::NTuple{N, Any}
+end
+LabeledArray(data::AbstractArray, dims) = LabeledArray(collect(data), Tuple(dims))
+
+Base.size(a::LabeledArray) = size(a.data)
+Base.getindex(a::LabeledArray, i...) = getindex(a.data, i...)
+
+Base.show(io::IO, ::MIME"text/plain", a::LabeledArray) = _labeled_table(io, a.data, a.dims, nothing)
+Base.show(io::IO, a::LabeledArray) = show(io, MIME"text/plain"(), a)
+
+"""Axis label collections for `x`, or `nothing` when `x` carries no labels."""
+_axis_labels(x::JuMP.Containers.DenseAxisArray) = axes(x)
+_axis_labels(x::Window) = axes(x.indices)
+_axis_labels(_) = nothing
+
+"""Wrap `result` in a [`LabeledArray`](@ref) using `x`'s axis labels, when available."""
+function _relabel(result::AbstractArray, x)
+	dims = _axis_labels(x)
+	(dims === nothing || ndims(result) != length(dims)) && return result
+	return LabeledArray(result, dims)
+end
+_relabel(result, x) = result
 
 const DEFAULT_SPECS = Ref{Any}(nothing)
 const DEFAULT_OPERATOR = Ref{Any}(:n)
@@ -125,21 +161,21 @@ end
 
 function _transform(op::Symbol, x, ref=nothing)
 	op in (:n, :abs) && return x
-	op in (:d, :dif) && return _dif(x)
-	op in (:p, :pch) && return _pch(x)
-	op in (:dp, :gdif) && return _gdif(x)
-	op == :l && return _log(x)
-	op == :dl && return _ldif(x)
+	op in (:d, :dif) && return _relabel(_dif(x), x)
+	op in (:p, :pch) && return _relabel(_pch(x), x)
+	op in (:dp, :gdif) && return _relabel(_gdif(x), x)
+	op == :l && return _relabel(_log(x), x)
+	op == :dl && return _relabel(_ldif(x), x)
 	ref = _ref_value(ref, op)
-	op == :m && return _as_numeric(x) .- _as_numeric(ref)
-	op == :q && return (_as_numeric(x) ./ _as_numeric(ref) .- 1) .* 100
-	op == :mp && return _pch(x) .- _pch(ref)
+	op == :m && return _relabel(_as_numeric(x) .- _as_numeric(ref), x)
+	op == :q && return _relabel((_as_numeric(x) ./ _as_numeric(ref) .- 1) .* 100, x)
+	op == :mp && return _relabel(_pch(x) .- _pch(ref), x)
 	op in (:r, :rn) && return ref
-	op == :rd && return _dif(ref)
-	op == :rp && return _pch(ref)
-	op == :rdp && return _gdif(ref)
-	op == :rl && return _log(ref)
-	op == :rdl && return _ldif(ref)
+	op == :rd && return _relabel(_dif(ref), ref)
+	op == :rp && return _relabel(_pch(ref), ref)
+	op == :rdp && return _relabel(_gdif(ref), ref)
+	op == :rl && return _relabel(_log(ref), ref)
+	op == :rdl && return _relabel(_ldif(ref), ref)
 	error("unknown print operator :$op")
 end
 
