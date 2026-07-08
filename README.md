@@ -10,6 +10,13 @@ Large-scale macroeconomic models are typically "square" — each equation determ
 - **Build models modularly** — Define separate `Block`s of equations that can be combined
 - **Swap endogenous/exogenous variables** — Use `@endo_exo_swap!` to change which variables are endogenous for calibration or counterfactual scenarios
 
+## Documentation
+
+Documentation is built with [Documenter.jl](https://github.com/JuliaDocs/Documenter.jl)
+from the `docs/` directory. It includes dedicated pages for getting started,
+core concepts, solving, plotting and printing, modular models, optimization, and
+the API reference.
+
 ## Quick Example
 
 > 📄 Full runnable version: [`examples/quick_example.jl`](examples/quick_example.jl)
@@ -389,6 +396,7 @@ SquareModels/
 ├── ext/
 │   ├── SquareModelsMakieExt.jl      # Plotting via Makie (optional dep)
 │   └── SquareModelsGAMSExt.jl       # GAMS CONOPT solver support (optional dep)
+├── docs/                     # Documenter.jl documentation
 ├── examples/
 │   ├── quick_example.jl      # Simple labor market model
 │   ├── modular_example.jl    # Modular CGE model example
