@@ -351,7 +351,26 @@ function _apply_ops(ops, x, ref=nothing, name="")
 	return Any[_transform(op, x, ref, name) for op in os]
 end
 
-_op_label(label, op) = op == :n ? label : "$label <$op>"
+"""Default y-axis label for an operator, e.g. `:m => "Difference from baseline"`. `nothing` when the operator doesn't imply a particular unit (e.g. `:n`)."""
+const _OP_AXIS_LABELS = Dict(
+	:d => "Difference",
+	:dif => "Difference",
+	:p => "Percent change",
+	:pch => "Percent change",
+	:dp => "Growth rate difference",
+	:gdif => "Growth rate difference",
+	:l => "Log",
+	:dl => "Log difference",
+	:m => "Difference from baseline",
+	:q => "Percent deviation from baseline",
+	:mp => "Growth rate difference from baseline",
+	:rd => "Difference",
+	:rp => "Percent change",
+	:rdp => "Growth rate difference",
+	:rl => "Log",
+	:rdl => "Log difference",
+)
+_op_axis_label(op) = get(_OP_AXIS_LABELS, op, nothing)
 
 _lookup(db, name::Symbol, fallback) = haskey(db.model, name) ? db.model[name] : (haskey(db, String(name)) ? db[name] : fallback())
 _value(db, x) = JuMP.value(v -> db[v], x)

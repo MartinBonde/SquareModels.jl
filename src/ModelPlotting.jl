@@ -28,7 +28,7 @@ module ModelPlotting
 using Base.Meta: isexpr
 import ..AbstractSeries   # shared supertype with `Window` (defined in the parent module)
 import ..Window
-using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _default_periods, _expand_dot_macro, _expand_ops, _macro_parts, _need_ref, _op_label, _ref_expr, _ref_value, _rewrite, _transform, _value_expr
+using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _default_periods, _expand_dot_macro, _expand_ops, _macro_parts, _need_ref, _op_axis_label, _ref_expr, _ref_value, _rewrite, _transform, _value_expr
 
 export @plot, plotvar, plotseries, labeled, LabeledSeries, alternating_dash!
 export set_plot_finalize!, reset_plot_finalize!, plot_finalize
@@ -85,18 +85,24 @@ axis_of(::Any) = nothing
 function expand end
 
 """
-    LabeledSeries(x, y, label)
+    LabeledSeries(x, y, label, op=:n)
 
 A plottable series carrying its own x-axis, y-values, and legend label. This is
 the common currency between `@plot`, `labeled`, and Makie (`convert_arguments`).
 Unlike a `Window` (a view onto model data), it holds eager, computed values; both
 share the [`AbstractSeries`](@ref) supertype.
+
+`op` records the print/plot operator (e.g. `:m`, `:q`) that produced `y`, used to
+pick a default y-axis label (see `_op_axis_label`) without cluttering the legend
+label itself.
 """
 struct LabeledSeries <: AbstractSeries
 	x::Vector
 	y::Vector{Float64}
 	label::String
+	op::Symbol
 end
+LabeledSeries(x, y, label) = LabeledSeries(x, y, label, :n)
 
 to_series(s::LabeledSeries) = (s.x, s.y)
 axis_of(s::LabeledSeries) = s.x
@@ -179,7 +185,7 @@ function _filter_periods(s::LabeledSeries, periods)
 	periods === nothing && return s
 	keep = [_period_match(x, periods) for x in s.x]
 	any(keep) || return s
-	return LabeledSeries(s.x[keep], s.y[keep], s.label)
+	return LabeledSeries(s.x[keep], s.y[keep], s.label, s.op)
 end
 
 _period_match(x, periods) = periods isa Union{AbstractArray,Tuple,AbstractRange} ? x in periods : x == periods
@@ -195,7 +201,7 @@ function _op_lines(ops, x::AbstractSeries, ref, label, xfrom, periods)
 		for (i, s) in enumerate(xlines)
 			r = reflines === nothing ? ref : reflines[i].y
 			line_label = length(xlines) == 1 ? label : s.label
-			push!(out, _filter_periods(LabeledSeries(s.x, _transform(op, s.y, r), _op_label(line_label, op)), periods))
+			push!(out, _filter_periods(LabeledSeries(s.x, _transform(op, s.y, r), line_label, op), periods))
 		end
 	end
 	return out
@@ -214,16 +220,19 @@ function _op_lines(ops, x::AbstractArray, ref, label, xfrom, periods)
 		for (i, s) in enumerate(xlines)
 			r = reflines === nothing ? ref : reflines[i].y
 			line_label = length(xlines) == 1 ? label : s.label
-			push!(out, _filter_periods(LabeledSeries(s.x, _transform(op, s.y, r), _op_label(line_label, op)), periods))
+			push!(out, _filter_periods(LabeledSeries(s.x, _transform(op, s.y, r), line_label, op), periods))
 		end
 	end
 	return out
 end
 
+_with_op(s::LabeledSeries, op) = LabeledSeries(s.x, s.y, s.label, op)
+
 function _op_lines(ops, x, ref, label, xfrom, periods)
 	out = LabeledSeries[]
 	for op in _expand_ops(ops)
-		append!(out, _filter_periods.(_lines(_transform(op, x, ref), _op_label(label, op), xfrom), Ref(periods)))
+		lines = _with_op.(_lines(_transform(op, x, ref), label, xfrom), op)
+		append!(out, _filter_periods.(lines, Ref(periods)))
 	end
 	return out
 end

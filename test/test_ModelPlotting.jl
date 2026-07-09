@@ -42,9 +42,29 @@ end
 	@test plot_finalize() === nothing
 end
 
+@testset "default y-axis label depends on operator" begin
+	m_series = SquareModels.LabeledSeries([1.0, 2.0], [1.0, 2.0], "qGDP", :m)
+	fig = plotseries([m_series])
+	ax = fig.content[1]
+	@test ax.ylabel[] == "Difference from baseline"
+	line = only(p for p in ax.scene.plots if p isa Makie.Lines)
+	@test line.label[] == "qGDP"
+
+	n_series = SquareModels.LabeledSeries([1.0, 2.0], [1.0, 2.0], "qGDP", :n)
+	@test plotseries([n_series]).content[1].ylabel[] == "Value"
+
+	@test plotseries([n_series]; ylabel="Custom").content[1].ylabel[] == "Custom"
+
+	mixed = [SquareModels.LabeledSeries([1.0, 2.0], [1.0, 2.0], "qGDP", :n), SquareModels.LabeledSeries([1.0, 2.0], [3.0, 4.0], "qGDP", :p)]
+	fig = plotseries(mixed)
+	@test fig.content[1].ylabel[] == "Value"
+	lines = [p for p in fig.content[1].scene.plots if p isa Makie.Lines]
+	@test Set(l.label[] for l in lines) == Set(["qGDP <n>", "qGDP <p>"])
+end
+
 @testset "alternating_dash for repeated variables" begin
 	# Same base label twice (e.g. same variable from two sources): same color, different dash.
-	series = [labeled([1.0, 2.0], "qGDP"), labeled([2.0, 3.0], "qGDP <r>"), labeled([3.0, 4.0], "qC")]
+	series = [labeled([1.0, 2.0], "qGDP"), SquareModels.LabeledSeries([1.0, 2.0], [2.0, 3.0], "qGDP", :r), labeled([3.0, 4.0], "qC")]
 	fig = plotseries(series; legend=false)
 	plots = [p for p in fig.content[1].scene.plots if p isa Makie.Lines]
 	@test plots[1].color[] == plots[2].color[]
@@ -167,15 +187,17 @@ end
 	@test SquareModels.ModelExpressions._expr_label(:(a + b - c + d)) == "a + b - c + d"
 	series = @plot :q baseline=>shock p[:hh, :]
 	@test length(series) == 1
-	@test series[1].label == "p[:hh, :] <q>"
+	@test series[1].label == "p[:hh, :]"
+	@test series[1].op == :q
 	@test series[1].x == [2020, 2021]
 	@test series[1].y == [100.0, 100.0]
 	series = @plot :p baseline p
 	@test length(series) == 2
-	@test series[1].label == "p[hh] <p>"
+	@test series[1].label == "p[hh]"
+	@test series[1].op == :p
 	@test series[1].x == [2020, 2021]
 	@test isequal(series[1].y, [NaN, 100.0])
-	@test series[2].label == "p[firm] <p>"
+	@test series[2].label == "p[firm]"
 	@test series[2].x == [2020, 2021]
 	@test isequal(series[2].y, [NaN, 100.0])
 	series = @plot baseline p .* q
@@ -206,12 +228,14 @@ end
 	@test series[2].y == [100.0, 100.0]
 	series = @plot :q baseline=>shock sum([L[l, t] for l in l])
 	@test length(series) == 1
-	@test series[1].label == "sum([L[l, t] for l = l]) <q>"
+	@test series[1].label == "sum([L[l, t] for l = l])"
+	@test series[1].op == :q
 	@test series[1].x == [2020, 2021]
 	@test series[1].y == [100.0, 100.0]
 	series = @plot :q baseline=>shock sum(L[l, t] for l in l)
 	@test length(series) == 1
-	@test series[1].label == "sum((L[l, t] for l = l)) <q>"
+	@test series[1].label == "sum((L[l, t] for l = l))"
+	@test series[1].op == :q
 	@test series[1].x == [2020, 2021]
 	@test series[1].y == [100.0, 100.0]
 

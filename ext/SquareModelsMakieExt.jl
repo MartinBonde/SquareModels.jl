@@ -6,8 +6,29 @@ using SquareModels.ModelPlotting: plot_finalize
 
 const _LINESTYLES = [:solid, :dot, :dash, :dashdot]
 
-# "qGDP <q>" and "qGDP <r>" are the same variable under different operators.
-_base_label(s::AbstractSeries) = replace(s.label, r" <[^>]+>$" => "")
+_base_label(s::AbstractSeries) = s.label
+_op(s::AbstractSeries) = :n
+_op(s::ModelPlotting.LabeledSeries) = s.op
+
+# When several operators are plotted for the same base label (e.g. `:a` expands
+# to :n, :p, :r, :rp), the label alone can't tell the lines apart, so tag those
+# (and only those) with the operator, e.g. "qGDP <p>".
+function _legend_labels(series)
+	groups = Dict{String,Set{Symbol}}()
+	for s in series
+		push!(get!(groups, _base_label(s), Set{Symbol}()), _op(s))
+	end
+	return [length(groups[_base_label(s)]) > 1 ? "$(s.label) <$(_op(s))>" : s.label for s in series]
+end
+
+"""Default y-axis label for a set of series: the shared operator's label (e.g.
+`:m => "Difference from baseline"`) when every series uses the same operator,
+otherwise falls back to `"Value"`."""
+function _default_ylabel(series)
+	ops = unique(_op.(series))
+	length(ops) == 1 && return something(ModelPlotting._op_axis_label(only(ops)), "Value")
+	return "Value"
+end
 
 function _palette_colors()
 	pal = Makie.to_value(Makie.theme(:palette))
@@ -87,7 +108,7 @@ function ModelPlotting.plotvar(
 	label=nothing,
 	title=nothing,
 	xlabel="",
-	ylabel="Value",
+	ylabel=nothing,
 	figure=(;),
 	axis=(;),
 	legend=nothing,
@@ -97,9 +118,10 @@ function ModelPlotting.plotvar(
 	ls = ModelPlotting.expand(w)
 	name = w.varname === nothing ? "" : String(w.varname)
 	fig = Figure(; figure...)
-	ax = Axis(fig[1, 1]; title=something(title, name), xlabel, ylabel, axis...)
-	for s in ls
-		lbl = length(ls) == 1 ? something(label, s.label) : s.label
+	ax = Axis(fig[1, 1]; title=something(title, name), xlabel, ylabel=something(ylabel, _default_ylabel(ls)), axis...)
+	legend_labels = _legend_labels(ls)
+	for (s, lbl0) in zip(ls, legend_labels)
+		lbl = length(ls) == 1 ? something(label, lbl0) : lbl0
 		lines!(ax, s; label=lbl, kwargs...)
 	end
 	return _finish(fig, ax, ls, legend, alternating_dash)
@@ -111,7 +133,7 @@ function ModelPlotting.plotseries(
 	series::AbstractVector{<:AbstractSeries};
 	title="",
 	xlabel="",
-	ylabel="Value",
+	ylabel=nothing,
 	figure=(;),
 	axis=(;),
 	legend=nothing,
@@ -123,9 +145,9 @@ function ModelPlotting.plotseries(
 		push!(expanded, s)
 	end
 	fig = Figure(; figure...)
-	ax = Axis(fig[1, 1]; title, xlabel, ylabel, axis...)
-	for s in expanded
-		lines!(ax, s; label=s.label, kwargs...)
+	ax = Axis(fig[1, 1]; title, xlabel, ylabel=something(ylabel, _default_ylabel(expanded)), axis...)
+	for (s, lbl) in zip(expanded, _legend_labels(expanded))
+		lines!(ax, s; label=lbl, kwargs...)
 	end
 	return _finish(fig, ax, expanded, legend, alternating_dash)
 end
