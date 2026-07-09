@@ -25,6 +25,46 @@ using Makie
 	@test plotseries(only(series)) isa Makie.Figure
 end
 
+@testset "Makie extension legend and finalize hook" begin
+	series = [labeled([1.0, 2.0], "demo"), labeled([2.0, 3.0], "demo2")]
+	has_legend(fig) = any(c isa Makie.Legend for c in fig.content)
+
+	@test has_legend(plotseries(series))  # default axislegend
+	@test !has_legend(plotseries(series; legend=false))
+	@test has_legend(plotseries(series; legend=(position=:cb,)))
+
+	calls = []
+	set_plot_finalize!((fig, ax, s) -> (push!(calls, length(s)); fig))
+	@test !has_legend(plotseries(series))  # hook suppresses default legend
+	@test calls == [2]
+	@test has_legend(plotseries(series; legend=true))  # explicit legend still applies
+	reset_plot_finalize!()
+	@test plot_finalize() === nothing
+end
+
+@testset "alternating_dash for repeated variables" begin
+	# Same base label twice (e.g. same variable from two sources): same color, different dash.
+	series = [labeled([1.0, 2.0], "qGDP"), labeled([2.0, 3.0], "qGDP <r>"), labeled([3.0, 4.0], "qC")]
+	fig = plotseries(series; legend=false)
+	plots = [p for p in fig.content[1].scene.plots if p isa Makie.Lines]
+	@test plots[1].color[] == plots[2].color[]
+	@test plots[1].color[] != plots[3].color[]
+	@test plots[1].linestyle[] === nothing        # :solid
+	@test plots[2].linestyle[] isa AbstractVector # dashed
+	@test plots[3].linestyle[] === nothing
+
+	# Unique labels: no restyling unless forced.
+	series = [labeled([1.0, 2.0], "a"), labeled([2.0, 3.0], "b")]
+	fig = plotseries(series; legend=false)
+	plots = [p for p in fig.content[1].scene.plots if p isa Makie.Lines]
+	@test plots[1].color[] != plots[2].color[]
+
+	fig = plotseries(series; legend=false, alternating_dash=true)  # forced: consecutive pairs
+	plots = [p for p in fig.content[1].scene.plots if p isa Makie.Lines]
+	@test plots[1].color[] == plots[2].color[]
+	@test plots[2].linestyle[] isa AbstractVector
+end
+
 SquareModels.ModelPlotting.plotseries(series::Vector{SquareModels.LabeledSeries}; kwargs...) = series
 
 model = Model()

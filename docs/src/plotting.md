@@ -150,3 +150,44 @@ set_default_periods!(2020:2030)
 @plot qGDP
 reset_print_defaults!()
 ```
+
+## Theming and customization
+
+`plotvar`, `plotseries`, and `@plot` inherit Makie theme defaults for colors,
+fonts, grid, and figure size. By default a native legend is added with
+`axislegend(ax; position=:rb)`; pass `legend=false` to suppress it,
+`legend=true` for `axislegend(ax)` with default placement, or a NamedTuple like
+`legend=(position=:cb,)` to customise it.
+
+For organisation-specific layout (coloured labels below the chart, alternating
+dashes, extra annotations), register a **finalize hook** — a function
+`f(fig, ax, series)` called after the lines are drawn. When a hook is set, the
+default native legend is skipped so the hook can supply its own (an explicit
+`legend=true`/NamedTuple still applies):
+
+```julia
+using CairoMakie
+using SquareModels
+using MyOrgMakieTheme
+
+MyOrgMakieTheme.activate!()
+set_plot_finalize!(MyOrgMakieTheme.colored_text_legend!)
+
+@plot data qGDP
+reset_plot_finalize!()
+```
+
+A finalize function receives the figure, the axis, and the expanded line list
+(a `Vector` of `AbstractSeries`) and can add legends or annotations and adjust
+the layout.
+
+### Alternating dash for repeated variables
+
+When the same variable is drawn several times — from multiple default sources,
+or as value/reference pairs with operators like `:an` — the lines share a base
+label (the label with any ` <op>` suffix stripped). In that case the plot
+builders automatically give each such group a single color and distinguish the
+lines by linestyle (solid, dot, dash, ...). Control this with the
+`alternating_dash` keyword: `false` disables it, `true` forces it (pairing
+consecutive lines when all labels are unique), and `alternating_dash!(ax, series)`
+applies it manually.

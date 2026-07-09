@@ -30,7 +30,22 @@ import ..AbstractSeries   # shared supertype with `Window` (defined in the paren
 import ..Window
 using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _default_periods, _expand_dot_macro, _expand_ops, _macro_parts, _need_ref, _op_label, _ref_expr, _ref_value, _rewrite, _transform, _value_expr
 
-export @plot, plotvar, plotseries, labeled, LabeledSeries
+export @plot, plotvar, plotseries, labeled, LabeledSeries, alternating_dash!
+export set_plot_finalize!, reset_plot_finalize!, plot_finalize
+
+const _plot_finalize = Ref{Union{Nothing,Function}}(nothing)
+
+"""
+    set_plot_finalize!(f)
+    set_plot_finalize!(nothing)
+
+Register `f(fig, ax, series)` to run after `plotvar`/`plotseries` draw the axis and lines.
+Use for custom legends, dash patterns, annotations, etc.
+"""
+set_plot_finalize!(f::Function) = (_plot_finalize[] = f; f)
+set_plot_finalize!(::Nothing) = (_plot_finalize[] = nothing; nothing)
+plot_finalize() = _plot_finalize[]
+reset_plot_finalize!() = set_plot_finalize!(nothing)
 
 # Implemented in the Makie extension; nothing to draw without it.
 function _plotting_error(name, args)
@@ -43,6 +58,7 @@ end
 
 plotvar(args...; kwargs...) = _plotting_error(:plotvar, args)
 plotseries(args...; kwargs...) = _plotting_error(:plotseries, args)
+alternating_dash!(args...; kwargs...) = _plotting_error(:alternating_dash!, args)
 
 """Convert a value to Float64, mapping `nothing` to `NaN` (like missing data)."""
 _to_float(x) = x === nothing ? NaN : Float64(x)

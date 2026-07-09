@@ -1,6 +1,6 @@
 name = "SquareModels"
 uuid = "8f61fe60-8cc6-11ec-3043-2171a73045bd"
-version = "0.6.3"
+version = "0.6.5"
 authors = ["Martin Kirk Bonde <martin@bonde.dk>"]
 
 [deps]
@@ -36,7 +36,7 @@ CSV = "0.10"
 DataFrames = "1"
 Dictionaries = "0.4"
 GAMS = "0.5"
-GDXInterface = "0.2"
+GDXInterface = "0.1"
 JuMP = "1"
 Lazy = "0.15"
 Makie = "0.24"
