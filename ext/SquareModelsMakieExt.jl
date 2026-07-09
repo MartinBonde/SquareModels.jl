@@ -86,7 +86,7 @@ function ModelPlotting.plotvar(
 	w::Window;
 	label=nothing,
 	title=nothing,
-	xlabel="Year",
+	xlabel="",
 	ylabel="Value",
 	figure=(;),
 	axis=(;),
@@ -110,7 +110,7 @@ ModelPlotting.plotvar(db::ModelDictionary, slice; kwargs...) = ModelPlotting.plo
 function ModelPlotting.plotseries(
 	series::AbstractVector{<:AbstractSeries};
 	title="",
-	xlabel="Year",
+	xlabel="",
 	ylabel="Value",
 	figure=(;),
 	axis=(;),
