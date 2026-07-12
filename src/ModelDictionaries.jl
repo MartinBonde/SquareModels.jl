@@ -151,7 +151,11 @@ function ModelDictionary(m::AbstractModel, values::Union{Number, AbstractVector}
 	return d
 end
 
-Base.copy(md::ModelDictionary) = ModelDictionary(md.model, copy(md.dictionary))
+function Base.copy(md::ModelDictionary)
+	copy_md = ModelDictionary(md.model, copy(md.dictionary))
+	copy_md._synced_n_vars[] = md._synced_n_vars[]
+	return copy_md
+end
 
 """
     add_missing_model_variables!(md::ModelDictionary)

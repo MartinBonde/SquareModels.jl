@@ -325,6 +325,22 @@ end
 	@test length(subset) == len_before
 end
 
+@testset "Copy preserves sparse synchronization state" begin
+	model = Model()
+	@variable(model, x[1:3])
+
+	full = ModelDictionary(model, [1.0, 2.0, 3.0])
+	sparse = full[full .> 1.0]
+	sparse._synced_n_vars[] = num_variables(model)
+
+	copied = copy(sparse)
+	@test length(copied) == length(sparse) == 2
+	@test copied._synced_n_vars[] == sparse._synced_n_vars[]
+
+	copied[x[2:3]]
+	@test length(copied) == 2
+end
+
 @testset "Test broadcasting" begin
 	model = Model()
 	@variable(model, x)
