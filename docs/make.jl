@@ -22,9 +22,8 @@ makedocs(;
         "Examples" => "examples.md",
         "API Reference" => "api.md",
     ],
-    checkdocs=:none,
-    doctest=false,
-    warnonly=[:cross_references],
+    checkdocs=:exports,
+    doctest=true,
 )
 
 if haskey(ENV, "GITHUB_REPOSITORY")

@@ -56,7 +56,26 @@ function _plotting_error(name, args)
 	error("No `$name` method for argument types ($types).")
 end
 
+"""
+    plotvar(window; kwargs...)
+    plotvar(data::ModelDictionary, variable; kwargs...)
+
+Plot one model variable and return `(figure, axis, series)`.
+
+Load a Makie backend such as CairoMakie before calling this function. Keywords
+configure the title, axis, legend, line style, and underlying Makie figure.
+"""
 plotvar(args...; kwargs...) = _plotting_error(:plotvar, args)
+
+"""
+    plotseries(series; kwargs...)
+
+Plot one or more [`AbstractSeries`](@ref) values and return
+`(figure, axis, series)`.
+
+Load a Makie backend such as CairoMakie before calling this function. A single
+series or a vector of series is accepted.
+"""
 plotseries(args...; kwargs...) = _plotting_error(:plotseries, args)
 alternating_dash!(args...; kwargs...) = _plotting_error(:alternating_dash!, args)
 

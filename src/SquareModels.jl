@@ -390,17 +390,18 @@ end
 """
     overlaps(a::Block, b::Block) → Bool
 
-Check if two blocks share any common variables.
+Check if two blocks share any endogenous variables.
 
-Returns `true` if any variable appears in both blocks, which may indicate
-duplicate equations or intentional variable sharing across model components.
+Returns `true` if a variable is endogenous in both blocks, which indicates
+that the blocks cannot be combined without creating duplicate equations.
+Variables that are exogenous in one or both blocks do not count as overlap.
 
 # Arguments
 - `a::Block`: First block
 - `b::Block`: Second block
 
 # Returns
-`true` if the blocks have at least one variable in common, `false` otherwise
+`true` if the blocks have at least one endogenous variable in common, `false` otherwise
 
 # Examples
 ```julia
@@ -588,6 +589,21 @@ function add_equation(model, endo::VariableRef, lhs, rhs=0)
 	Block(m, [endo], [resid], all_vars, Equation[eq])
 end
 
+"""
+    add_equation!(block::Block, endo::VariableRef, lhs, rhs=0) → Block
+
+Add an endogenous variable and its equation to `block` in place.
+
+Like [`add_equation`](@ref), this creates and fixes a residual variable and
+stores the equation `lhs + residual == rhs`. An error is thrown if `endo` is
+already endogenous in the block.
+
+# Example
+```julia
+block = Block(model)
+add_equation!(block, x, x, 1)
+```
+"""
 function add_equation!(block::Block, endo::VariableRef, lhs, rhs=0)
 	endo ∉ block._endogenous_set || error("Cannot add equation: $(name(endo)) is already endogenous in this block.")
 	eq_block = add_equation(block.model, endo, lhs, rhs)

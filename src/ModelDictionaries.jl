@@ -1128,10 +1128,8 @@ end
 
 Assert that two ModelDictionaries have no significant differences.
 
-A difference passes if BOTH conditions are met:
-1. `|a - b| <= atol` (absolute tolerance must always be satisfied)
-2. Either `|b| <= atol` (reference is small, so relative doesn't apply)
-   OR `|a - b| / |b| <= rtol` (relative tolerance is satisfied)
+A difference passes if either `|a - b| <= atol` or, for a reference value
+larger than `atol`, `|a - b| / |b| <= rtol`.
 
 This approach uses absolute tolerance for small values and relative tolerance
 for large values, avoiding issues with division by near-zero references.

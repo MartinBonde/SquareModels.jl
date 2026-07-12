@@ -7,6 +7,7 @@ using Dictionaries
 using Parquet2
 using DataFrames
 using CSV
+using Ipopt
 
 # GDX read/write goes through GDXInterface (bundles gdx_jll), so no GAMS runtime is needed.
 using GDXInterface: write_gdx
@@ -1077,6 +1078,50 @@ end
 		@test d[C[2029]] == 140.0
 		@test isnothing(d[C[2030]])
 	end
+end
+
+@testset "Comparison utilities" begin
+	model = Model()
+	JuMP.@variables model begin
+		x
+		y
+	end
+	a = ModelDictionary(model)
+	b = ModelDictionary(model)
+
+	@test keys_match(a, b)
+	a[x] = 100.0
+	@test !keys_match(a, b)
+	b[x] = 101.0
+	@test keys_match(a, b)
+
+	@test assert_no_diff(a, b; atol=0.1, rtol=0.02)
+	@test_throws ToleranceError assert_no_diff(a, b; atol=0.1, rtol=0.005)
+
+	b[x] = 100.05
+	@test assert_no_diff(a, b; atol=0.1)
+
+	b[y] = 1.0
+	@test !keys_match(a, b)
+	@test_throws ErrorException assert_no_diff(a, b)
+
+	other_model = Model()
+	@variable(other_model, z)
+	other = ModelDictionary(other_model)
+	@test !keys_match(a, other)
+	@test_throws ErrorException assert_no_diff(a, other)
+end
+
+@testset "value_dict" begin
+	model = Model(Ipopt.Optimizer)
+	set_silent(model)
+	@variable(model, x)
+	@constraint(model, x == 2)
+	optimize!(model)
+
+	data = value_dict(model)
+	@test data isa ModelDictionary
+	@test data[x] ≈ 2.0
 end
 
 @testset "Test residual tolerance overrides" begin

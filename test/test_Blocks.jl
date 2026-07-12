@@ -620,6 +620,7 @@ end
 	JuMP.@variables m begin
 		x
 		y[1:3]
+		z
 	end
 
 	b1 = @block m begin
@@ -634,6 +635,12 @@ end
 	@test overlaps(b1, b2)  # y[2] is in both
 	@test y[2] ∈ shared_endogenous(b1, b2)
 	@test y[1] ∉ shared_endogenous(b1, b2)
+
+	b3 = @block m begin
+		z, z == y[1]
+	end
+	@test !overlaps(b1, b3)  # y[1] is shared, but exogenous in b3
+	@test isempty(shared_endogenous(b1, b3))
 
 	# Test summary
 	io = IOBuffer()

@@ -24,13 +24,6 @@ SquareModelsGAMSExt = "GAMS"
 SquareModelsGDXInterfaceExt = "GDXInterface"
 SquareModelsMakieExt = "Makie"
 
-[extras]
-GDXInterface = "b8352055-3412-4df1-864e-ee7edae71aec"
-
-# GDXInterface is not yet registered in General; pull it from its repository.
-[sources]
-GDXInterface = {url = "https://github.com/jump-dev/GDXInterface.jl"}
-
 [compat]
 CSV = "0.10"
 DataFrames = "1"

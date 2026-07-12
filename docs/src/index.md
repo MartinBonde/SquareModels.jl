@@ -13,8 +13,15 @@ It is designed for large economic models where you want to:
 
 ## Installation
 
-Add SquareModels to your Julia environment and load it together with JuMP and a
-solver:
+Add SquareModels to your environment together with a solver such as Ipopt:
+
+```julia
+using Pkg
+Pkg.add(["SquareModels", "Ipopt"])
+```
+
+Solvers are not included with SquareModels. After installation, load the
+packages:
 
 ```julia
 using JuMP

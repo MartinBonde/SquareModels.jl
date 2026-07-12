@@ -6,6 +6,11 @@ CurrentModule = SquareModels
 
 ## Main Module
 
+```@docs
+SquareModels
+SquareModels.Window
+```
+
 ```@autodocs
 Modules = [SquareModels]
 Private = false

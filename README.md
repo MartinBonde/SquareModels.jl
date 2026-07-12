@@ -1,11 +1,23 @@
 # SquareModels
 
-[![CI](https://github.com/MartinBonde/SquareModels/actions/workflows/CI.yml/badge.svg)](https://github.com/MartinBonde/SquareModels/actions/workflows/CI.yml)
-[![codecov](https://codecov.io/gh/MartinBonde/SquareModels/branch/master/graph/badge.svg)](https://codecov.io/gh/MartinBonde/SquareModels)
+[![CI](https://github.com/MartinBonde/SquareModels.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/MartinBonde/SquareModels.jl/actions/workflows/CI.yml)
+[![codecov](https://codecov.io/gh/MartinBonde/SquareModels.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/MartinBonde/SquareModels.jl)
 
 A JuMP extension for writing modular models with **square systems of equations** — systems where the number of constraints equals the number of endogenous variables.
 
-**Documentation: [martinbonde.github.io/SquareModels](https://martinbonde.github.io/SquareModels)**
+**Documentation: [martinbonde.github.io/SquareModels.jl](https://martinbonde.github.io/SquareModels.jl)**
+
+## Installation
+
+Install SquareModels together with a solver such as Ipopt:
+
+```julia
+using Pkg
+Pkg.add(["SquareModels", "Ipopt"])
+```
+
+Solvers are not included with SquareModels; use any solver supported by the
+workflow you choose.
 
 ## Motivation
 
@@ -77,7 +89,7 @@ println("Multipliers: ", scenario ./ baseline .- 1)
 
 ## Documentation
 
-The [documentation pages](https://martinbonde.github.io/SquareModels) cover:
+The [documentation pages](https://martinbonde.github.io/SquareModels.jl) cover:
 
 - **Getting Started** — a compact calibration and scenario workflow
 - **Core Concepts** — blocks, endo-exo swapping, model dictionaries, data I/O, variable metadata, sparse arrays
