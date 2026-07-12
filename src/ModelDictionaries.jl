@@ -1,5 +1,8 @@
-# ModelDictionaries - Variable-to-value mappings for JuMP models
-# Integrated into SquareModels
+# ModelDictionaries — variable-to-value mappings for JuMP models
+#
+# This file defines [`ModelDictionary`](@ref), [`load`](@ref), [`unload`](@ref), and
+# helpers for reading tabular data into JuMP variable containers. Included by
+# SquareModels; exported from the main module.
 
 using Dictionaries
 using Parquet2
@@ -10,12 +13,20 @@ using PrettyTables: pretty_table
 """
     ModelDictionary
 
-A dictionary mapping variable names to numeric values, with special support for JuMP variables.
+A dictionary mapping JuMP variable names to numeric values.
 
-`ModelDictionary` provides convenient syntax for storing and retrieving values
-associated with JuMP variables. It supports indexing by variable references,
-strings, symbols, or dot notation, and integrates with JuMP's `fix` and `set_start_value`
-functions.
+`ModelDictionary` is the primary container for model data in SquareModels: calibration
+inputs, solved values, and scenario comparisons. Values are keyed by JuMP's internal
+variable names (e.g. `"K[2025]"`, `"σ"`).
+
+# Access patterns
+- **Scalar:** `d[x]`, `d["σ"]`, `d.σ`
+- **Container:** `d[y]` returns a [`Window`](@ref) view; `d[y[1:3]]` and `d.y[1:3]` work too
+- **Broadcasting:** `d .+ 1`, `d[d .> 0]` (boolean mask returns a subset dictionary)
+- **Dot assignment:** `d.y .= [1, 2, 3]`
+
+Unset entries are `nothing`. After adding variables to the model (e.g. via new blocks),
+call [`add_missing_model_variables!`](@ref) or index the dictionary to sync new keys.
 
 # Fields
 - `model::AbstractModel`: The JuMP model whose variables are tracked
@@ -37,9 +48,13 @@ d.y = [1, 2, 3]       # Dot notation
 # Get values
 d[x]       # 1.0
 d.y[1]     # 1
+
+# Save / load round-trip
+unload("data.parquet", d)
+d2 = load("data.parquet", model)
 ```
 
-See also: [`fix`](@ref), [`set_start_value`](@ref), [`value_dict`](@ref)
+See also: [`fix`](@ref), [`set_start_value`](@ref), [`value_dict`](@ref), [`load`](@ref), [`unload`](@ref)
 """
 struct ModelDictionary
 	model::AbstractModel
@@ -389,9 +404,11 @@ JuMP.fix(variables::AbstractArray, d::ModelDictionary) = fix.(variables, Ref(d))
     fix(model::AbstractModel, d::ModelDictionary)
     fix(d::ModelDictionary)
 
-Fix all variables in a JuMP model to their corresponding values in a ModelDictionary.
+Fix variables to their values in a `ModelDictionary`.
 
-Variables with `nothing` values in the dictionary are skipped.
+When `d` contains every model variable (`length(d) == num_variables(model)`), all
+variables are fixed and each must have a non-`nothing` value. When `d` is a subset
+dictionary (e.g. from `d[d .> 0]`), only the keys present in `d` are fixed.
 
 # Arguments
 - `model::AbstractModel`: The model whose variables to fix (optional if using `fix(d)`)
@@ -409,6 +426,9 @@ d.y = [1, 2, 3]
 
 fix(d)  # Fix all variables to their values in d
 # Equivalent to: fix(model, d)
+
+# Fix only a subset
+fix(d[d .> 0])
 ```
 
 See also: [`ModelDictionary`](@ref), [`set_start_value`](@ref), [`value_dict`](@ref)
@@ -462,9 +482,10 @@ JuMP.set_start_value(variables::AbstractArray, values::ModelDictionary) = set_st
     set_start_value(model::AbstractModel, d::ModelDictionary)
     set_start_value(d::ModelDictionary)
 
-Set starting values for all variables in a model from a ModelDictionary.
+Set starting values for variables from a `ModelDictionary`.
 
-Starting values provide hints to the solver about where to begin the optimization.
+Behavior matches [`fix`](@ref): a full dictionary requires every model variable to
+have a value; a subset dictionary only sets start values for keys present in `d`.
 
 # Arguments
 - `model::AbstractModel`: The model whose variables to set (optional if using `set_start_value(d)`)
@@ -483,7 +504,7 @@ d.y = [1, 2, 3]
 set_start_value(d)  # Set start values for all variables
 ```
 
-See also: [`ModelDictionary`](@ref), [`fix`](@ref), [`value_dict`](@ref)
+See also: [`ModelDictionary`](@ref), [`fix`](@ref), [`value_dict`](@ref), [`load`](@ref)
 """
 function JuMP.set_start_value(model::AbstractModel, d::ModelDictionary)
 	for var in all_variables(model)
@@ -566,16 +587,22 @@ end
 """
     unload(path::AbstractString, d::ModelDictionary)
 
-Save a ModelDictionary to a Parquet file.
+Save a `ModelDictionary` to a Parquet file in the **simple format**.
 
-The dictionary is stored as a table with columns:
-- `variable`: The base variable name (e.g., "K", "cᵃ")
-- `indices`: The index string (e.g., "2025", "15,2025", "" for scalars)
-- `value`: The numeric value
+Each assigned entry becomes one row. Entries with `nothing` values are omitted.
+
+| Column     | Description |
+|------------|-------------|
+| `variable` | Base name (e.g. `"K"`, `"cᵃ"`) |
+| `indices`  | Comma-joined index string (`"2025"`, `"15,2025"`, or `""` for scalars) |
+| `value`    | Numeric value |
+
+This format is also accepted by [`load`](@ref) for Parquet and CSV files, and by
+[`read_variable`](@ref), [`read_sparse_array`](@ref), and [`read_indices`](@ref).
 
 # Arguments
-- `path`: File path (typically ending in .parquet)
-- `d`: The ModelDictionary to save
+- `path`: Output path (`.parquet`)
+- `d`: The `ModelDictionary` to save
 
 # Examples
 ```julia
@@ -599,51 +626,74 @@ end
     load(path::AbstractString, model::AbstractModel; renames...) → ModelDictionary
     load(path::AbstractString, model::AbstractModel, renames::Pair...) → ModelDictionary
 
-Load a ModelDictionary from a Parquet, CSV, or GDX file.
+Load a `ModelDictionary` from a Parquet, CSV, or GDX file.
 
-Iterates over all variables in the model and looks up their values in the data file.
-Variables not found in the file will have `nothing` values.
+Walks every variable in `model` and looks up `(base_name, indices)` in the file.
+Unmatched model variables remain `nothing`. Data rows whose indices fall outside the
+model's index sets are ignored (no error).
 
-For Parquet files, supports both the simple format (variable, indices, value) and Gekko's format
-(with id, name, dim1, dim2, period, value columns).
+# Supported formats
 
-CSV files use the simple format only.
+**Simple format** (Parquet and CSV): columns `variable`, `indices`, `value` — the
+format written by [`unload`](@ref). Integer index components are parsed as `Int`;
+other components become `Symbol`.
 
-For GDX files, reads parameters and uses their values. Multi-dimensional parameters have
-their indices joined with commas.
+**Gekko Parquet format**: columns `id`, `name`, `dim1`, `dim2`, `period`, `value`.
+Metadata rows carry variable names; data rows carry values. Converted internally to
+the simple format.
+
+**GDX** (`.gdx`): requires the optional GDXInterface extension (`using GDXInterface`).
+Multi-dimensional GDX parameters use comma-joined indices, as in the simple format.
+
+# Name mappings
+
+Mappings associate a model variable's **base name** with a data symbol. Pass them as
+keyword arguments or trailing `Pair`s (`Y => "OtherY"`). Keys may be `Symbol`s or
+JuMP variable references; only the base name is used.
+
+**Simple rename** — load `OtherY` data into model variable `Y`:
+
+```julia
+load(path, model; Y = "OtherY")
+load(path, model, Y => "OtherY", X => "DataX")
+```
+
+**Slice** — extract a lower-dimensional slice from a higher-dimensional data symbol.
+Use `:` for positions filled from the model variable's indices; fixed labels pin
+other dimensions (GAMS-style `vC[:cTot,:]`):
+
+```julia
+load(path, model; C = "vC[:cTot,:]")       # C[t] ← vC[:cTot, t]
+load(path, model; K = "vK[:iTot,:tot,:]")   # K[t] ← vK[:iTot, :tot, t]
+```
+
+A spec without brackets (e.g. `"nPop"`) is a simple rename. A spec with brackets is
+always treated as a slice, even if every position is fixed.
 
 # Arguments
-- `path`: Path to the Parquet, CSV, or GDX file
-- `model`: The JuMP model to associate with the dictionary
-- `renames`: Optional name mappings to load variables from differently-named data. Can be passed as keyword arguments
-  or as `Pair` arguments. For simple renames, use `ModelVar="GdxName"`. For slicing (extracting a subset of a
-  higher-dimensional GDX symbol), use the syntax `ModelVar="GdxSymbol[fixed1,fixed2,:,...]"` where `:` marks
-  positions that correspond to the model variable's indices.
+- `path`: Path to a `.parquet`, `.csv`, or `.gdx` file
+- `model`: JuMP model whose variables define the output dictionary
+- `renames`: Optional `ModelVar => data_symbol` mappings (keyword or `Pair` syntax)
 
 # Returns
-A `ModelDictionary` populated with values from the file.
-Variables in the model that aren't in the file will have `nothing` values.
+A `ModelDictionary` for `model` with loaded values; missing entries are `nothing`.
 
 # Examples
 ```julia
 d = load("solution.parquet", model)
-d = load("data.gdx", model)
-set_start_value(d)  # Use loaded values as starting point
+set_start_value(d)  # warm-start from file
 
-# Load with name remapping (similar to GAMS \$LOAD path Y=OtherY;)
-d = load("data.parquet", model, Y => "OtherY", X => "DataX")
-d = load("data.gdx", model; N_a="nPop", L_a="nLHh")
+# Rename data symbols (similar to GAMS \$LOAD path Y=OtherY;)
+d = load("data.parquet", model; N_a = "nPop", L_a = "nLHh")
 
-# Slice a higher-dimensional GDX symbol into a model variable:
-# If GDX has vC[commodity,t] and model has C[t], extract vC[:cTot,t] into C[t]
+# GDX with renames and slices (after `using GDXInterface`)
 d = load("data.gdx", model;
-    C = "vC[:cTot,:]",      # C[t] ← vC[:cTot, t]
-    X = "vX[:xTot,:]",      # X[t] ← vX[:xTot, t]
-    K = "vK[:iTot,:tot,:]", # K[t] ← vK[:iTot, :tot, t]
+    N_a = "nPop",
+    C = "vC[:cTot,:]",
 )
 ```
 
-See also: [`unload`](@ref), [`ModelDictionary`](@ref)
+See also: [`unload`](@ref), [`read_variable`](@ref), [`ModelDictionary`](@ref)
 """
 function load(path::AbstractString, model::AbstractModel, renames::Pair...; kwargs...)
 	rename_dict, slice_dict = _build_rename_and_slice_dicts(renames, kwargs)
@@ -700,10 +750,23 @@ function _read_simple_keyed(path::AbstractString; variable=nothing)
 end
 
 """
+    read_indices(path::AbstractString)
+
 Read index components from a simple `(variable, indices, value)` CSV or Parquet file.
 
-Returns a `Vector{Union{Symbol, Int}}` when every row has one index, otherwise an
-`n×d` `Matrix{Union{Symbol, Int}}` with one column per index dimension.
+Parses the `indices` column of every row. Integer components become `Int`; other
+components become `Symbol`.
+
+# Returns
+- `Vector{Union{Symbol, Int}}` when all rows have a single index
+- `Matrix{Union{Symbol, Int}}` (`n×d`) when rows have `d` comma-separated indices
+
+# Examples
+```julia
+read_indices("dims.csv")  # [:a, :b, :c] or [:a 2024; :b 2024; ...]
+```
+
+See also: [`read_variable`](@ref), [`read_sparse_array`](@ref), [`load`](@ref)
 """
 function read_indices(path::AbstractString)
 	df = _read_simple_df(path)
@@ -723,14 +786,50 @@ function read_indices(path::AbstractString)
 	return mat
 end
 
-"""Read a simple `(variable, indices, value)` file as a `SparseZeroArray` keyed by parsed indices."""
+"""
+    read_sparse_array(path::AbstractString; variable=nothing)
+    read_sparse_array(path::AbstractString, variable)
+
+Read a simple `(variable, indices, value)` file as a [`SparseZeroArray`](@ref).
+
+When `variable` is given, only rows with that base name are read. Indices are parsed
+as in [`read_indices`](@ref).
+
+# Examples
+```julia
+read_sparse_array("data.csv")           # all variables
+read_sparse_array("data.csv", "x")      # one variable
+read_sparse_array("data.csv"; variable="x")
+```
+
+See also: [`read_variable`](@ref), [`read_indices`](@ref), [`load`](@ref)
+"""
 read_sparse_array(path::AbstractString; variable=nothing) = SparseZeroArray(_read_simple_keyed(path; variable))
 read_sparse_array(path::AbstractString, variable) = read_sparse_array(path; variable)
 
-"""Read values from a file aligned to a JuMP variable container's keys.
+"""
+    read_variable(path::AbstractString, var; default=nothing, variable=base_name(var))
 
-Returns an array with the same shape and key order as `var`. Missing entries
-use `default` (default `nothing`).
+Read values from a simple-format file aligned to a JuMP variable container.
+
+Unlike [`load`](@ref), this does not build a full `ModelDictionary`; it returns a
+plain array matching `var`'s shape and key order. Use `variable` to read from a
+differently named column in the file.
+
+# Arguments
+- `path`: Path to a `.csv` or `.parquet` file in simple format
+- `var`: JuMP variable or container whose keys define the output layout
+- `default`: Value for indices missing from the file (default `nothing`)
+- `variable`: Base name to look up in the file (default: `base_name(var)`)
+
+# Examples
+```julia
+read_variable("data.csv", x)                  # match keys of x
+read_variable("data.csv", y; default=0.0)     # fill gaps with 0
+read_variable("data.csv", N_a; variable="nPop")  # rename on read
+```
+
+See also: [`load`](@ref), [`read_sparse_array`](@ref)
 """
 function read_variable(path::AbstractString, var; default=nothing, variable=base_name(var))
 	data = _read_simple_keyed(path; variable)

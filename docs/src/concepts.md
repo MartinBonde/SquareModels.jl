@@ -72,24 +72,40 @@ dimension) via PrettyTables.jl.
 
 ## Loading and Saving Data
 
-[`unload`](@ref) saves a `ModelDictionary` to a Parquet file and [`load`](@ref)
-reads one back, matching values to the model's variables by name and indices:
+[`unload`](@ref) saves a `ModelDictionary` to Parquet in a simple tabular format
+(`variable`, `indices`, `value`). Entries with `nothing` are omitted. [`load`](@ref)
+reads Parquet, CSV, or — with `using GDXInterface` — GDX files and matches rows to
+the model's variables by base name and indices.
 
 ```julia
 unload("solution.parquet", baseline)
 baseline = load("solution.parquet", model)
 ```
 
-`load` also reads CSV files and — with the optional GDXInterface extension
-(`using GDXInterface`) — GAMS GDX files. Renames and slices map differently
-named or higher-dimensional data symbols onto model variables:
+**Index matching:** only indices that exist in both the file and the model are loaded.
+Extra data indices are ignored; model indices missing from the file stay `nothing`.
+
+**Renames** map model variable base names to differently named data symbols (like GAMS
+`$LOAD`). Pass keyword arguments or `Pair`s:
+
+```julia
+d = load("data.parquet", model; N_a = "nPop", Y => "OtherY")
+```
+
+**Slices** extract a lower-dimensional symbol from higher-dimensional data. Use `:`
+for positions filled from the model variable's indices:
 
 ```julia
 d = load("data.gdx", model;
-    N = "nPop",           # simple rename
-    C = "vC[:cTot,:]",    # C[t] ← vC[:cTot, t]
+    N = "nPop",              # simple rename
+    C = "vC[:cTot,:]",        # C[t] ← vC[:cTot, t]
+    K = "vK[:iTot,:tot,:]",   # K[t] ← vK[:iTot, :tot, t]
 )
 ```
+
+For reading a single variable without building a full dictionary, use
+[`read_variable`](@ref), [`read_sparse_array`](@ref), or [`read_indices`](@ref) on
+simple-format CSV/Parquet files.
 
 ## Variable Metadata
 
