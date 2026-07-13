@@ -304,4 +304,28 @@ end
 	reset_print_defaults!()
 end
 
+@testset "nothing propagates through expressions" begin
+	m2 = Model()
+	JuMP.@variables m2 begin
+		y
+		a[[:hh], 2020:2022]
+		b[[:hh], 2020:2022]
+	end
+	db = ModelDictionary(m2)
+	for t in 2021:2022
+		db[a[:hh, t]] = 1.0
+	end
+	for t in 2020:2022
+		db[b[:hh, t]] = 2.0
+	end
+	# y and a[:hh, 2020] stay nothing
+	@test @evalexpr(db, y) === nothing
+	@test @evalexpr(db, y * b[:hh, 2020]) === nothing
+	@test isequal(Array(@evalexpr(db, a[:hh, :] * b[:hh, :])), [nothing, 2.0, 2.0])
+	@test isequal(Array(@evalexpr(db, b[:hh, :] / a[:hh, :])), [nothing, 2.0, 2.0])
+	@test @evalexpr(db, sum(a[:hh, t] for t in 2020:2022)) === nothing
+	@test occursin("nothing", sprint(show, MIME"text/plain"(), @prt(db, a[:hh, :] * b[:hh, :])))
+	@test isequal(@evalexpr(:p, db, a[:hh, :]), [NaN, NaN, 0.0])
+end
+
 end

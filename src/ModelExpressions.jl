@@ -260,7 +260,40 @@ end
 _default_operator() = DEFAULT_OPERATOR[]
 _default_periods() = DEFAULT_PERIODS[]
 
-_to_float(x) = x === nothing ? NaN : Float64(x)
+# `nothing` marks unassigned entries (distinct from explicit `missing` in read
+# data) and must propagate through expression arithmetic: `p * q` with an
+# unassigned `p[t]` should yield `nothing` at `t`, not a MethodError. Plain
+# `nothing` has no arithmetic, so while JuMP evaluates an expression the
+# unassigned entries are represented by the numeric sentinel `_NA`, which
+# absorbs every operation; results are converted back to `nothing` afterwards.
+struct _Unassigned <: Real end
+const _NA = _Unassigned()
+
+Base.promote_rule(::Type{_Unassigned}, ::Type{<:Real}) = _Unassigned
+Base.convert(::Type{_Unassigned}, x::_Unassigned) = x
+Base.convert(::Type{_Unassigned}, ::Real) = _NA
+Base.zero(::Type{_Unassigned}) = _NA
+Base.one(::Type{_Unassigned}) = _NA
+Base.show(io::IO, ::_Unassigned) = print(io, "nothing")
+Base.:(==)(::_Unassigned, ::_Unassigned) = true
+Base.:(==)(::_Unassigned, ::Real) = false
+Base.:(==)(::Real, ::_Unassigned) = false
+Base.isless(::_Unassigned, ::_Unassigned) = false
+Base.isless(::_Unassigned, ::Real) = false
+Base.isless(::Real, ::_Unassigned) = false
+for op in (:+, :-, :*, :/, :\, :^, :%, :min, :max)
+	@eval Base.$op(::_Unassigned, ::_Unassigned) = _NA
+end
+for f in (:+, :-, :abs, :sqrt, :log, :log2, :log10, :log1p, :exp, :expm1, :inv)
+	@eval Base.$f(::_Unassigned) = _NA
+end
+
+_nothing_to_na(x) = x === nothing ? _NA : x
+_na_to_nothing(x) = x === _NA ? nothing : x
+_restore_nothing(x) = _na_to_nothing(x)
+_restore_nothing(x::AbstractArray) = _na_to_nothing.(x)
+
+_to_float(x) = (x === nothing || x === _NA) ? NaN : Float64(x)
 
 _as_numeric(x::Number) = Float64(x)
 _as_numeric(x) = [_to_float(v) for v in Array(x)]
@@ -325,6 +358,15 @@ end
 """Whether any operator in `ops` (after expanding aliases like `:a`) needs a reference source."""
 _group_needs_ref(ops) = any(_need_ref, _expand_ops(ops))
 
+# A `[expr1, expr2]` group evaluates to a MultiVarResult; apply the operator
+# per element, pairing each with the matching element of the reference.
+function _transform(op::Symbol, x::MultiVarResult, ref=nothing, name="")
+	refv = ref isa Function ? ref() : ref
+	vals = Tuple(_transform(op, v, refv isa MultiVarResult ? refv.values[i] : refv, x.names[i])
+		for (i, v) in enumerate(x.values))
+	return MultiVarResult(x.names, vals)
+end
+
 function _transform(op::Symbol, x, ref=nothing, name="")
 	op in (:n, :abs) && return _relabel(x, x, name)
 	op in (:d, :dif) && return _relabel(_dif(x), x, name)
@@ -373,7 +415,7 @@ const _OP_AXIS_LABELS = Dict(
 _op_axis_label(op) = get(_OP_AXIS_LABELS, op, nothing)
 
 _lookup(db, name::Symbol, fallback) = haskey(db.model, name) ? db.model[name] : (haskey(db, String(name)) ? db[name] : fallback())
-_value(db, x) = JuMP.value(v -> db[v], x)
+_value(db, x) = _restore_nothing(JuMP.value(v -> _nothing_to_na(db[v]), x))
 _value(db, x::AbstractArray{<:Number}) = x
 _value(db, x::Tuple) = map(y -> _value(db, y), x)
 
@@ -535,7 +577,14 @@ function _collect_generator_bases(ex, acc, bound)
 	return _collect_bases(ex.args[1], acc, current_bound)
 end
 
-_value_expr(item, dbv, periodv) = :($(GlobalRef(@__MODULE__, :_value))($dbv, $(_rewrite(item, dbv, periodv))))
+function _value_expr(item, dbv, periodv)
+	if isexpr(item, :vect) || (isexpr(item, :tuple) && length(item.args) > 1)
+		items = Any[_value_expr(it, dbv, periodv) for it in item.args]
+		names = String[_expr_label(it) for it in item.args]
+		return :($(GlobalRef(@__MODULE__, :MultiVarResult))($names, ($(items...),)))
+	end
+	return :($(GlobalRef(@__MODULE__, :_value))($dbv, $(_rewrite(item, dbv, periodv))))
+end
 
 function _ref_expr(item, refv, periodv=nothing)
 	refv === nothing && return nothing
