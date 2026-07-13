@@ -63,6 +63,8 @@ end
 Base.:(==)(a::MultiVarResult, b) = a.values == b
 Base.:(==)(a, b::MultiVarResult) = a == b.values
 Base.:(==)(a::MultiVarResult, b::MultiVarResult) = a.values == b.values
+Base.:(==)(a::MultiVarResult, b::AbstractVector) = collect(a.values) == b
+Base.:(==)(a::AbstractVector, b::MultiVarResult) = a == collect(b.values)
 Base.length(a::MultiVarResult) = length(a.values)
 Base.iterate(a::MultiVarResult, state...) = iterate(a.values, state...)
 Base.getindex(a::MultiVarResult, i) = a.values[i]
@@ -544,11 +546,7 @@ function _ref_expr(item, refv, periodv=nothing)
 end
 
 function _value_arg(expr, dbv, refv, periodv, ops, apply_ref)
-	if isexpr(expr, :vect)
-		items = Any[_value_arg(it, dbv, refv, periodv, ops, apply_ref) for it in expr.args]
-		return Expr(:vect, items...)
-	end
-	if isexpr(expr, :tuple) && length(expr.args) > 1
+	if isexpr(expr, :vect) || (isexpr(expr, :tuple) && length(expr.args) > 1)
 		items = Any[_value_arg(it, dbv, refv, periodv, ops, apply_ref) for it in expr.args]
 		names = String[_expr_label(it) for it in expr.args]
 		multivar_ref = GlobalRef(@__MODULE__, :MultiVarResult)
