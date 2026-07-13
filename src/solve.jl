@@ -469,6 +469,11 @@ function _gams_annotation_paths(model)
     ext === nothing ? String[] : ext._gams_annotation_paths(model)
 end
 
+function _is_gams_model(model)
+    ext = Base.get_extension(@__MODULE__, :SquareModelsGAMSExt)
+    ext !== nothing && ext._is_gams_model(model)
+end
+
 function _solve_equation_names(model)
     names = String[]
     for (F, S) in JuMP.list_of_constraint_types(model)
@@ -476,6 +481,16 @@ function _solve_equation_names(model)
         append!(names, name.(JuMP.all_constraints(model, F, S)))
     end
     return names
+end
+
+function _annotate_gams_files!(block, model)
+    paths = _gams_annotation_paths(model)
+    if !isempty(paths)
+        equation_names = _solve_equation_names(model)
+        for path in paths
+            annotate_lst!(block, path; equation_names)
+        end
+    end
 end
 
 """
@@ -617,13 +632,11 @@ function solve!(
     skip_diagnostics::Bool = false
 )
     model, var_map = _build_model(block, data; start_values, replace_nothing, skip_diagnostics)
-    optimize!(model)
-
-    paths = _gams_annotation_paths(model)
-    if !isempty(paths)
-        equation_names = _solve_equation_names(model)
-        for path in paths
-            annotate_lst!(block, path; equation_names)
+    try
+        optimize!(model)
+    finally
+        if _is_gams_model(model)
+            _annotate_gams_files!(block, model)
         end
     end
 

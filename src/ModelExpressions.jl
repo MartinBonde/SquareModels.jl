@@ -52,8 +52,8 @@ _relabel(result, x, name="") = result
 Result of printing several expressions together, e.g. `@prt data (qGDP, pGDP)`.
 Behaves like the underlying `values` tuple for equality, iteration, and
 indexing, but displays as a single PrettyTables.jl table with one column per
-name when every value carries matching axis labels (or is a scalar); falls
-back to printing each value under its own heading otherwise.
+name when every value is a scalar or carries the same final-dimension labels;
+falls back to printing each value under its own heading otherwise.
 """
 struct MultiVarResult{T<:Tuple}
 	names::Vector{String}
@@ -124,21 +124,19 @@ function _period_row_table(io::IO, data, dims, name="")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", r::MultiVarResult)
-	dims = _dims_of(first(r.values))
-	if dims !== nothing && all(v -> _dims_of(v) == dims, r.values)
-		if isempty(dims)
-			mat = reduce(hcat, vec(_data_of(v)) for v in r.values)
-			pretty_table(io, mat; column_labels=_column_labels(r.names))
-		else
-			periods = collect(dims[end])
-			combos = _leading_combos(dims)
-			mats = [permutedims(reshape(_data_of(v), length(combos), length(periods))) for v in r.values]
-			labels = [_column_label(name, c) for (name, _) in zip(r.names, r.values) for c in combos]
-			pretty_table(io, reduce(hcat, mats);
-				column_labels=_column_labels(labels),
-				row_labels=string.(periods),
-				stubhead_label="year")
-		end
+	dims = _dims_of.(r.values)
+	if all(==(()), dims)
+		mat = reduce(hcat, vec(_data_of(v)) for v in r.values)
+		pretty_table(io, mat; column_labels=_column_labels(r.names))
+	elseif all(d -> d !== nothing && !isempty(d), dims) && all(d -> collect(d[end]) == collect(first(dims)[end]), dims)
+		periods = collect(first(dims)[end])
+		combos = _leading_combos.(dims)
+		mats = [permutedims(reshape(_data_of(v), length(c), length(periods))) for (v, c) in zip(r.values, combos)]
+		labels = [_column_label(name, c) for (name, cs) in zip(r.names, combos) for c in cs]
+		pretty_table(io, reduce(hcat, mats);
+			column_labels=_column_labels(labels),
+			row_labels=string.(periods),
+			stubhead_label="year")
 	else
 		for (i, (name, v)) in enumerate(zip(r.names, r.values))
 			i > 1 && println(io)

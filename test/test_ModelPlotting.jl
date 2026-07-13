@@ -135,6 +135,9 @@ end
 	multi_vector = @prt(:m, baseline=>shock, [p[:hh, :], q[:hh, :]])
 	@test multi_vector.names == ["p[:hh, :]", "q[:hh, :]"]
 	@test count(==("year"), split(sprint(show, MIME"text/plain"(), multi_vector))) == 1
+	mixed_dims_print = sprint(show, MIME"text/plain"(), @prt(:m, baseline=>shock, [p[:hh, :], q]))
+	@test count(==("year"), split(mixed_dims_print)) == 1
+	@test all(label -> occursin(label, mixed_dims_print), ["p[:hh, :]", "q[hh]", "q[firm]"])
 	fq = 2
 	@test @prt(baseline, p[:hh, 2021] * q[:hh, 2021] / fq) == 2.0
 	@test @prt(baseline, (p[:hh, 2021] * q[:hh, 2021], p[:firm, 2021] * q[:firm, 2020] / fq)) == (4, 30.0)

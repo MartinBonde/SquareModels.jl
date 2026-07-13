@@ -84,6 +84,27 @@ end
     @test solution[y] ≈ 25.0 atol=1e-6
 end
 
+@testset "GAMS failed solve annotates generated files" begin
+    dir = mktempdir()
+    m = square_model(; gamsdir = GAMS_SYSDIR, working_dir=dir)
+    JuMP.@variable(m, foo)
+
+    data = ModelDictionary(m)
+    data[foo] = 0.0
+    block = @block m begin
+        foo, foo == 1 / (foo - foo)
+    end
+    data[residuals(block)] .= 0.0
+
+    @test_throws ErrorException solve(block, data)
+
+    @test isfile(joinpath(dir, "moi.lst"))
+    content = read(joinpath(dir, "moi.gms"), String)
+    @test occursin("foo", content)
+    @test !occursin(r"\bx1\b", content)
+    @test !occursin(r"\beq1\b", content)
+end
+
 @testset "annotate_lst! on real GAMS listing" begin
     # GAMS.jl suppresses the symbol listing ($offlisting, limrow/limcol/solprint=0), so a
     # clean solve never names x<i>/eq<i> in the .lst. CONOPT *does* name them when the square
