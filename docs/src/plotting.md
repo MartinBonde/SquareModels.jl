@@ -106,6 +106,50 @@ growth and `:q` for percent deviation from a reference:
 @prt 2020:2060 qGDP                         # default source, selected periods
 ```
 
+### Print operators
+
+Operators transform the expression result along its final dimension. In the
+definitions below, ``x_t`` is the source value, ``b_t`` is the reference value,
+and ``\Delta x_t = x_t - x_{t-1}``.
+
+Source transformations:
+
+- `:n`, `:abs` — level, ``x_t`` (no transformation).
+- `:d`, `:dif` — difference, ``\Delta x_t``.
+- `:p`, `:pch` — percent change, ``100(x_t/x_{t-1}-1)``.
+- `:dp`, `:gdif` — change in the percent growth rate.
+- `:l` — natural logarithm, ``\log(x_t)``.
+- `:dl` — log difference, ``\log(x_t)-\log(x_{t-1})``.
+
+Comparisons with a reference:
+
+- `:m` — absolute deviation, ``x_t-b_t``.
+- `:q` — percent deviation, ``100(x_t/b_t-1)``.
+- `:mp` — difference between the source and reference percent growth rates.
+
+Reference transformations:
+
+- `:r`, `:rn` — reference level, ``b_t``.
+- `:rd` — reference difference, ``\Delta b_t``.
+- `:rp` — reference percent change.
+- `:rdp` — change in the reference percent growth rate.
+- `:rl` — natural logarithm of the reference.
+- `:rdl` — reference log difference.
+
+The following bundle operators return several transformations together:
+
+- `:a` → `[:n, :p, :r, :rp]`
+- `:an` → `[:n, :r]`
+- `:ad` → `[:d, :rd]`
+- `:ap` → `[:p, :rp]`
+- `:adp` → `[:dp, :rdp]`
+- `:al` → `[:l, :rl]`
+- `:adl` → `[:dl, :rdl]`
+
+Pass an explicit operator vector to request another combination, for example
+`@prt [:n, :p] data qGDP`. The reference operators, comparison operators, and
+all bundle operators require a `reference => source` pair.
+
 A `reference => source` pair supplies the reference for operators that need one,
 like `:q` above. Without such an operator (or with a `Tuple` of sources/pairs),
 the values from each database print side by side instead, one column per
