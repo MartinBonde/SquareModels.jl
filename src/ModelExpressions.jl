@@ -382,7 +382,7 @@ function _transform(op::Symbol, x, ref=nothing, name="")
 	op == :m && return _relabel(_as_numeric(x) .- _as_numeric(ref), x, name)
 	op == :q && return _relabel((_as_numeric(x) ./ _as_numeric(ref) .- 1) .* 100, x, name)
 	op == :mp && return _relabel(_pch(x) .- _pch(ref), x, name)
-	op in (:r, :rn) && return ref
+	op in (:r, :rn) && return _relabel(ref, ref, name)
 	op == :rd && return _relabel(_dif(ref), ref, name)
 	op == :rp && return _relabel(_pch(ref), ref, name)
 	op == :rdp && return _relabel(_gdif(ref), ref, name)

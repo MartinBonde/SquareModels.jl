@@ -155,6 +155,9 @@ end
 	@test @prt(:m, baseline=>shock, p[:hh, :]) == [1.0, 2.0]
 	@test @prt(:q, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
 	@test isequal(map(Array, @evalexpr([:n, :p], baseline, p[:hh, :])), [[1, 2], [NaN, 100.0]])
+	an = @prt(:an, baseline=>shock, p)
+	@test all(v -> v isa LabeledArray, an)
+	@test occursin("year", sprint(show, MIME"text/plain"(), an[2]))
 	@test (@evalexpr :q baseline=>shock p[:hh, :]) == [100.0, 100.0]
 	op = :q
 	@test @prt(op, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
