@@ -418,15 +418,12 @@ const _OP_AXIS_LABELS = Dict(
 )
 _op_axis_label(op) = get(_OP_AXIS_LABELS, op, nothing)
 
+_has_model_binding(db, name) = haskey(db.model, name) || haskey(db, String(name))
+_model_binding(db, name) = haskey(db.model, name) ? db.model[name] : db[name]
+
 function _lookup(db, name::Symbol, fallback, periods=nothing)
-	x = if haskey(db.model, name)
-		db.model[name]
-	elseif haskey(db, String(name))
-		db[name]
-	else
-		return fallback()
-	end
-	return _with_periods(x, periods)
+	_has_model_binding(db, name) || return fallback()
+	return _with_periods(_model_binding(db, name), periods)
 end
 _value(db, x) = _restore_nothing(JuMP.value(v -> _nothing_to_na(db[v]), x))
 _value(db, x::AbstractArray{<:Number}) = x
@@ -437,6 +434,13 @@ _slice_periods(x, periods) = x
 _slice_periods(x::AbstractArray, periods) = x[ntuple(_ -> Colon(), ndims(x) - 1)..., periods]
 _slice_periods(x::Window, periods) = x[ntuple(_ -> Colon(), ndims(x) - 1)..., periods]
 _period_ref(base, periods, indices...) = periods === nothing ? base[indices...] : base[indices[1:end-1]..., periods]
+
+function _model_ref(db, name, fallback, periods, indices...)
+	_has_model_binding(db, name) || return fallback()[indices...]
+	base = _model_binding(db, name)
+	ndims(base) == length(indices) + 1 || return base[indices...]
+	return periods === nothing ? base[indices..., :] : base[indices..., periods]
+end
 
 # Only arithmetic operators broadcast implicitly (`a * b` -> `a .* b`). Named
 # calls (`sum`, `log`, ...) are left as written, so reductions stay reductions;
@@ -503,8 +507,16 @@ function _rewrite(ex, dbv, periodv=nothing, bound=())
 	ex = _expand_dot_macro(ex)
 	if ex.head === :ref
 		base = ex.args[1]
-		newbase = base isa Symbol && !(base in bound) ? _model_binding_expr(dbv, base) : _rewrite(base, dbv, periodv, bound)
 		indices = Any[ex.args[2:end]...]
+		if base isa Symbol && !(base in bound)
+			newbase = _model_binding_expr(dbv, base)
+			if periodv !== nothing && !isempty(indices) && _is_colon_index(indices[end])
+				return :($(GlobalRef(@__MODULE__, :_period_ref))($newbase, $periodv, $(indices...)))
+			end
+			return :($(GlobalRef(@__MODULE__, :_model_ref))(
+				$dbv, $(QuoteNode(base)), () -> $base, $periodv, $(indices...)))
+		end
+		newbase = _rewrite(base, dbv, periodv, bound)
 		if periodv !== nothing && !isempty(indices) && _is_colon_index(indices[end])
 			return :($(GlobalRef(@__MODULE__, :_period_ref))($newbase, $periodv, $(indices...)))
 		end
@@ -755,6 +767,8 @@ end
     @evalexpr op (source1, reference=>source2, ...) expr
 
 Evaluate one or more model expressions, resolving bare names against `db`.
+For a model variable, exactly one omitted final index implicitly selects its
+time dimension, so `L[l]` is equivalent to `L[l, :]` and respects active periods.
 
 Use `reference => source` in place of `db` to supply a reference for operators
 that need one (e.g. `:q`, `:m`); `db` alone (no operator that needs a

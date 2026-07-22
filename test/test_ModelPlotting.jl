@@ -123,6 +123,7 @@ end
 	@test @evalexpr(baseline, p[:hh, 2020] * q[:hh, 2020]) == 2
 	@test (@evalexpr baseline p[:hh, 2020] * q[:hh, 2020]) == 2
 	@test Array(@evalexpr(baseline, p[:firm, :] * q[:firm, :])) == [30, 60]
+	@test Array(@evalexpr(baseline, p[:firm] * q[:firm])) == [30, 60]
 	@test Array(@evalexpr(baseline, p * q)) == [2 4; 30 60]
 	@test Array(@evalexpr(baseline, p[:firm, :] / p[:firm, 2020])) == [1.0, 2.0]
 	@test Array(@evalexpr(baseline, p[:firm, :] .* q[:firm, :])) == [30, 60]
@@ -131,6 +132,9 @@ end
 	@test Array(@prt(baseline, (@. p * q))) == [2 4; 30 60]
 	@test Array(@evalexpr(baseline, sum([L[l, :] for l in l]))) == [11, 22]
 	@test Array(@evalexpr(baseline, sum(L[l, :] for l in l))) == [11, 22]
+	@test Array(@evalexpr(baseline, sum(L[l] for l in l))) == [11, 22]
+	local_vector = [7, 8]
+	@test @evalexpr(baseline, local_vector[1]) == 7
 	@test @prt(baseline, [x, p[:hh, 2021] * q[:hh, 2021]]) == [3, 4]
 	multi_vector = @prt(:m, baseline=>shock, [p[:hh, :], q[:hh, :]])
 	@test multi_vector.names == ["p[:hh, :]", "q[:hh, :]"]
@@ -289,16 +293,23 @@ end
 	@test series[1].y == [100.0]
 	set_default_source!(baseline)
 	@test Array(@prt(p[:hh, :])) == [2]
+	@test Array(@prt(p[:hh])) == [2]
 	@test @prt(p[:hh, 2020]) == 1
+	@test @prt(2020, p[:hh]) == 1
 	@test Array(@prt 2020:2020 p[:hh, :]) == [1]
+	@test Array(@prt 2020:2020 p[:hh]) == [1]
 	@test Array(@prt 2021:2021 baseline p[:hh, :]) == [2]
 	@test Array(@prt(sum(L[l, :] for l in l))) == [22]
+	@test Array(@prt(sum(L[l] for l in l))) == [22]
 	series = @plot p
 	@test length(series) == 2
 	@test series[1].x == [2021]
 	@test series[1].y == [2.0]
 	@test series[2].x == [2021]
 	@test series[2].y == [20.0]
+	series = @plot p[:hh]
+	@test only(series).x == [2021]
+	@test only(series).y == [2.0]
 	series = @plot 2020:2020 p
 	@test series[1].x == [2020]
 	@test series[1].y == [1.0]
