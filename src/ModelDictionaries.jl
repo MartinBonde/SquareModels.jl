@@ -73,30 +73,15 @@ end
 	Base.get,
 )
 
-function Base.show(io::IO, ::MIME"text/plain", md::ModelDictionary)
+function Base.show(io::IO, md::ModelDictionary)
 	n = length(md)
-	print(io, "ModelDictionary with ", n, " entries")
+	print(io, "ModelDictionary with $n entries")
 	n == 0 && return
-	println(io, ":")
-	# Show first few and last few entries, similar to Vector display
-	max_show = get(io, :limit, false) ? 10 : n
-	half = max_show ÷ 2
-	ks = collect(keys(md.dictionary))
-	vs = collect(values(md.dictionary))
-	key_width = maximum(length ∘ string, ks; init=1)
-	for i in eachindex(ks)
-		if n > max_show && i == half + 1
-			println(io, "  ⋮")
-			continue
-		elseif n > max_show && half < i < n - half + 1
-			continue
-		end
-		print(io, "  ", lpad(ks[i], key_width), " => ", vs[i])
-		i < n && println(io)
-	end
+	assigned = count(!isnothing, values(md.dictionary))
+	print(io, " ($assigned assigned, $(n - assigned) unset)")
 end
 
-Base.show(io::IO, md::ModelDictionary) = show(io, MIME"text/plain"(), md)
+Base.show(io::IO, ::MIME"text/plain", md::ModelDictionary) = show(io, md)
 
 """
     ModelDictionary(model::AbstractModel)

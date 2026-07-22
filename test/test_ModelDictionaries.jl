@@ -31,6 +31,14 @@ all_nothing(x) = all(isnothing.(x))
 	@test length(b) == length(all_variables(model))
 end
 
+@testset "ModelDictionary display" begin
+	b = ModelDictionary(model)
+	@test sprint(show, b) == "ModelDictionary with 21 entries (0 assigned, 21 unset)"
+	b[x] = 1
+	@test sprint(show, MIME"text/plain"(), b) == "ModelDictionary with 21 entries (1 assigned, 20 unset)"
+	@test sprint(show, ModelDictionary(Model())) == "ModelDictionary with 0 entries"
+end
+
 @testset "Test getting and setting single variables refs" begin
 	b = ModelDictionary(model)
 
