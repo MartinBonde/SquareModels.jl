@@ -120,14 +120,17 @@ function _period_row_table(io::IO, data, dims, name="")
 	pretty_table(io, mat;
 		column_labels=_column_labels([_column_label(name, c) for c in combos]),
 		row_labels=string.(periods),
-		stubhead_label="year")
+		stubhead_label="year",
+		fit_table_in_display_vertically=false)
 end
 
 function Base.show(io::IO, ::MIME"text/plain", r::MultiVarResult)
 	dims = _dims_of.(r.values)
 	if all(==(()), dims)
 		mat = reduce(hcat, vec(_data_of(v)) for v in r.values)
-		pretty_table(io, mat; column_labels=_column_labels(r.names))
+		pretty_table(io, mat;
+			column_labels=_column_labels(r.names),
+			fit_table_in_display_vertically=false)
 	elseif all(d -> d !== nothing && !isempty(d), dims) && all(d -> collect(d[end]) == collect(first(dims)[end]), dims)
 		periods = collect(first(dims)[end])
 		combos = _leading_combos.(dims)
@@ -136,7 +139,8 @@ function Base.show(io::IO, ::MIME"text/plain", r::MultiVarResult)
 		pretty_table(io, reduce(hcat, mats);
 			column_labels=_column_labels(labels),
 			row_labels=string.(periods),
-			stubhead_label="year")
+			stubhead_label="year",
+			fit_table_in_display_vertically=false)
 	else
 		for (i, (name, v)) in enumerate(zip(r.names, r.values))
 			i > 1 && println(io)
@@ -414,7 +418,16 @@ const _OP_AXIS_LABELS = Dict(
 )
 _op_axis_label(op) = get(_OP_AXIS_LABELS, op, nothing)
 
-_lookup(db, name::Symbol, fallback) = haskey(db.model, name) ? db.model[name] : (haskey(db, String(name)) ? db[name] : fallback())
+function _lookup(db, name::Symbol, fallback, periods=nothing)
+	x = if haskey(db.model, name)
+		db.model[name]
+	elseif haskey(db, String(name))
+		db[name]
+	else
+		return fallback()
+	end
+	return _with_periods(x, periods)
+end
 _value(db, x) = _restore_nothing(JuMP.value(v -> _nothing_to_na(db[v]), x))
 _value(db, x::AbstractArray{<:Number}) = x
 _value(db, x::Tuple) = map(y -> _value(db, y), x)
@@ -480,7 +493,7 @@ end
 
 function _model_binding_expr(dbv, name::Symbol, periodv=nothing)
 	lookup_ref = GlobalRef(@__MODULE__, :_lookup)
-	return _period_expr(:($lookup_ref($dbv, $(QuoteNode(name)), () -> $name)), periodv)
+	return :($lookup_ref($dbv, $(QuoteNode(name)), () -> $name, $periodv))
 end
 
 """Rewrite an expression AST so bare variable names prefer JuMP variables from `db.model`."""
@@ -531,8 +544,6 @@ _binding_symbols(x::Expr) = Tuple(Symbol[s for a in x.args for s in _binding_sym
 _binding_symbols(_) = ()
 
 _is_colon_index(x) = x === Symbol(":")
-_period_expr(ex, ::Nothing) = ex
-_period_expr(ex, periodv) = :($(GlobalRef(@__MODULE__, :_with_periods))($ex, $periodv))
 
 function _collect_bases(ex, acc=Symbol[], bound=())
 	if ex isa Symbol

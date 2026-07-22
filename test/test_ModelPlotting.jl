@@ -292,6 +292,7 @@ end
 	@test @prt(p[:hh, 2020]) == 1
 	@test Array(@prt 2020:2020 p[:hh, :]) == [1]
 	@test Array(@prt 2021:2021 baseline p[:hh, :]) == [2]
+	@test Array(@prt(sum(L[l, :] for l in l))) == [22]
 	series = @plot p
 	@test length(series) == 2
 	@test series[1].x == [2021]
