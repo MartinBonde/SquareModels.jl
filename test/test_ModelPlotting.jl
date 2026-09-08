@@ -25,6 +25,17 @@ using Makie
 	@test plotseries(only(series)) isa Makie.Figure
 end
 
+@testset "Plot series in a figure grid" begin
+	fig = Makie.Figure()
+	series = labeled([1.0, 2.0], "demo")
+	@test plotseries(fig[1, 2], series; title="Panel", legend=false) === fig
+	ax = Makie.content(fig[1, 2])
+	@test ax.title[] == "Panel"
+	@test count(p -> p isa Makie.Lines, ax.scene.plots) == 1
+	@test plotseries(fig[2, 1][1, 1], [series]; legend=false) === fig
+	@test length(fig.content) == 2
+end
+
 @testset "Makie extension legend and finalize hook" begin
 	series = [labeled([1.0, 2.0], "demo"), labeled([2.0, 3.0], "demo2")]
 	has_legend(fig) = any(c isa Makie.Legend for c in fig.content)
@@ -38,8 +49,18 @@ end
 	@test !has_legend(plotseries(series))  # hook suppresses default legend
 	@test calls == [2]
 	@test has_legend(plotseries(series; legend=true))  # explicit legend still applies
+	@test !has_legend(plotseries(series; legend=false))
+	@test calls == [2] # Explicit legend choices never call the default hook.
 	reset_plot_finalize!()
 	@test plot_finalize() === nothing
+
+	# A hook can mutate the layout without returning the figure.
+	set_plot_finalize!((fig, ax, s) -> nothing)
+	try
+		@test plotseries(series) isa Makie.Figure
+	finally
+		reset_plot_finalize!()
+	end
 end
 
 @testset "default y-axis label depends on operator" begin
@@ -83,6 +104,121 @@ end
 	plots = [p for p in fig.content[1].scene.plots if p isa Makie.Lines]
 	@test plots[1].color[] == plots[2].color[]
 	@test plots[2].linestyle[] isa AbstractVector
+end
+
+@testset "Plot macro options and cached year axes" begin
+	m = Model()
+	JuMP.@variable(m, amount[2020:2022])
+	db = ModelDictionary(m)
+	db[amount] = [100, 110, 121]
+	ref = copy(db)
+	ref[amount] = [50, 55, 60.5]
+	periods = 2020:2022
+	op = :q
+	options = (legend=false, linewidth=4)
+	fig = @plot(op, periods, ref=>db, amount; title="Response", options...)
+	ax = Makie.content(fig[1, 1])
+	@test ax.title[] == "Response"
+	line = only(ax.scene.plots)
+	@test line.linewidth[] == 4
+	@test [p[1] for p in line[1][]] == collect(periods)
+	@test [p[2] for p in line[1][]] == [100, 100, 100]
+
+	cached = LabeledArray([100.0, 110.0, 121.0], (collect(periods),))
+	grid = Makie.Figure()
+	@test @plot(:p, periods, db, $cached; position=grid[2, 1], options...) === grid
+	points = only(Makie.content(grid[2, 1]).scene.plots)[1][]
+	@test [p[1] for p in points] == collect(periods)
+	@test isnan(points[1][2])
+	@test [p[2] for p in points[2:end]] ≈ [10, 10]
+
+	cached_grid = LabeledArray([1.0 2.0 3.0; 4.0 5.0 6.0], ([:a, :b], collect(periods)))
+	fig = @plot(:n, periods, db, $cached_grid; options...)
+	lines = Makie.content(fig[1, 1]).scene.plots
+	@test length(lines) == 2
+	@test [p[1] for p in lines[2][1][]] == collect(periods)
+	@test [p[2] for p in lines[2][1][]] == [4, 5, 6]
+	@test endswith(lines[1].label[], "[a]")
+	@test endswith(lines[2].label[], "[b]")
+
+	# A labeled comprehension must retain years after evaluating JuMP expressions.
+	fig = @plot(:q, periods, ref=>db,
+		LabeledArray([2 * amount[t] for t in periods], (periods,)); options...)
+	points = only(Makie.content(fig[1, 1]).scene.plots)[1][]
+	@test [p[1] for p in points] == collect(periods)
+	@test [p[2] for p in points] == [100, 100, 100]
+
+	set_default_source!(db)
+	try
+		fig = @plot(amount; title="Default source", options...)
+		@test Makie.content(fig[1, 1]).title[] == "Default source"
+	finally
+		reset_print_defaults!()
+	end
+	fig = @plot db amount title="Named option" legend=false
+	@test Makie.content(fig[1, 1]).title[] == "Named option"
+end
+
+@testset "Trellis panels retain expressions, indices, and sources" begin
+	m = Model()
+	JuMP.@variables m begin
+		a[[:north, :south], 2020:2022]
+		b[2020:2022]
+		c[i=[:north, :south], t=2020:2022; i == :north || t != 2021]
+	end
+	base = ModelDictionary(m)
+	base[a] .= 10.0
+	base[b] .= 30.0
+	base[c] .= 5.0
+	shock = copy(base)
+	shock[a] .*= 1.1
+	shock[b] .*= 1.2
+	set_default_source!(base => shock)
+	set_default_periods!(2021:2022)
+	set_default_operator!(:an)
+	try
+		seen = []
+		fig = @plot([a, b]; layout=:trellis, columns=2, legend=false,
+			panel_titles=["North", "South", "Total"], decorate=(ax, s) -> push!(seen, s))
+		axes = [x for x in fig.content if x isa Makie.Axis]
+		@test length(axes) == 3
+		@test [ax.title[] for ax in axes] == ["North", "South", "Total"]
+		@test all(length(s) == 2 for s in seen)
+		@test all(s.x == [2021, 2022] for panel in seen for s in panel)
+		@test seen[1][1].y ≈ [11, 11]
+		@test seen[1][2].y == [10, 10]
+		@test seen[3][1].y == [36, 36]
+		@test seen[3][2].y == [30, 30]
+		@test seen[1][1].panel == seen[1][2].panel
+		@test seen[1][1].panel != seen[2][1].panel
+		set_default_source!(base, shock)
+		set_default_operator!(:n)
+		fig = @plot(a; layout=:trellis, legend=false)
+		@test length([x for x in fig.content if x isa Makie.Axis]) == 2
+		@test all(length(ax.scene.plots) == 2 for ax in fig.content if ax isa Makie.Axis)
+		set_default_source!(base)
+		fig = @plot(c; layout=:trellis, legend=false)
+		axes = [x for x in fig.content if x isa Makie.Axis]
+		@test length(axes) == 2
+		@test isnan(only(axes[2].scene.plots)[1][][1][2])
+		@test_throws AssertionError @plot(a; layout=:trellis, columns=0)
+		@test_throws AssertionError @plot(a; layout=:trellis, panel_titles=["Only one"])
+	finally
+		reset_print_defaults!()
+	end
+end
+
+@testset "Direct line handles and per-series options" begin
+	series = [labeled([1.0, 2.0], "a"), labeled([3.0, 4.0], "b")]
+	fig = Makie.Figure()
+	ax = Makie.Axis(fig[1, 1])
+	lines = plotseries!(ax, series; labels=["First", "Second"],
+		styles=[(color=:red,), (linewidth=5,)])
+	@test length(lines) == 2
+	@test lines[1].label[] == "First"
+	@test lines[1].color[] == Makie.to_color(:red)
+	@test lines[2].linewidth[] == 5
+	@test_throws AssertionError plotseries!(ax, series; labels=["One"])
 end
 
 SquareModels.ModelPlotting.plotseries(series::Vector{SquareModels.LabeledSeries}; kwargs...) = series

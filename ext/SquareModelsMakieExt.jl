@@ -1,3 +1,5 @@
+# Draw model series and trellis panels with the active Makie theme.
+# Keep model expressions and data transformations in SquareModels.
 module SquareModelsMakieExt
 
 using Makie
@@ -73,21 +75,17 @@ function _apply_alternating_dash!(ax, series, alternating_dash)
 	ModelPlotting.alternating_dash!(ax, series)
 end
 
-# The global finalize hook (see `set_plot_finalize!`) is the theming entry point:
-# when set, it takes over legend placement etc., so the default native legend is
-# skipped unless explicitly requested with `legend=true` or a NamedTuple.
-function _finish(fig, ax, series, legend, alternating_dash)
-	_apply_alternating_dash!(ax, series, alternating_dash)
-	f = plot_finalize()
-	if legend === true
-		axislegend(ax)
-	elseif legend isa Union{NamedTuple,AbstractDict}
-		axislegend(ax; legend...)
-	elseif legend === nothing && f === nothing
-		axislegend(ax; position=:rb)
-	end
-	f === nothing && return fig
-	return f(fig, ax, series)
+# An explicit legend choice overrides the organisation's default legend.
+_legend!(::Nothing, fig, ax, series) =
+	_legend!(something(plot_finalize(), (position=:rb,)), fig, ax, series)
+_legend!(enabled::Bool, fig, ax, series) = enabled ? axislegend(ax) : nothing
+_legend!(options::Union{NamedTuple,AbstractDict}, fig, ax, series) = axislegend(ax; options...)
+_legend!(f::Function, fig, ax, series) = f(fig, ax, series)
+
+function _finish(fig, ax, series, legend, decorate)
+	decorate === nothing || decorate(ax, series)
+	_legend!(legend, fig, ax, series)
+	return fig
 end
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -107,51 +105,115 @@ function ModelPlotting.plotvar(
 	w::Window;
 	label=nothing,
 	title=nothing,
-	xlabel="",
-	ylabel=nothing,
-	figure=(;),
-	axis=(;),
-	legend=nothing,
-	alternating_dash=nothing,
 	kwargs...,
 )
 	ls = ModelPlotting.expand(w)
 	name = w.varname === nothing ? "" : String(w.varname)
-	fig = Figure(; figure...)
-	ax = Axis(fig[1, 1]; title=something(title, name), xlabel, ylabel=something(ylabel, _default_ylabel(ls)), axis...)
-	legend_labels = _legend_labels(ls)
-	for (s, lbl0) in zip(ls, legend_labels)
-		lbl = length(ls) == 1 ? something(label, lbl0) : lbl0
-		lines!(ax, s; label=lbl, kwargs...)
-	end
-	return _finish(fig, ax, ls, legend, alternating_dash)
+	labels = label === nothing ? nothing : [label]
+	return ModelPlotting.plotseries(ls; title=something(title, name), labels, kwargs...)
 end
 
 ModelPlotting.plotvar(db::ModelDictionary, slice; kwargs...) = ModelPlotting.plotvar(db[slice]; kwargs...)
 
+_expand(series) = reduce(vcat, ModelPlotting.expand.(series); init=ModelPlotting.LabeledSeries[])
+
+function ModelPlotting.plotseries!(
+	ax::Axis, series::AbstractVector{<:AbstractSeries};
+	labels=nothing, styles=nothing, alternating_dash=nothing, kwargs...,
+)
+	expanded = _expand(series)
+	labels = labels === nothing ? _legend_labels(expanded) : labels
+	styles = styles === nothing ? fill((;), length(expanded)) : styles
+	@assert length(labels) == length(styles) == length(expanded) "Supply one label and style per line."
+	plots = [lines!(ax, s; label, kwargs...) for (s, label) in zip(expanded, labels)]
+	_apply_alternating_dash!(ax, expanded, alternating_dash)
+	# Explicit per-series styles take precedence over the default dash cycle.
+	for (plot, style) in zip(plots, styles), (key, value) in pairs(style)
+		plot[key] = value
+	end
+	return plots
+end
+
+ModelPlotting.plotseries!(ax::Axis, series::AbstractSeries; kwargs...) =
+	ModelPlotting.plotseries!(ax, [series]; kwargs...)
+
+function ModelPlotting.plotseries(series::AbstractVector{<:AbstractSeries};
+	figure=(;), position=nothing, layout=:overlay, columns::Integer=3, kwargs...,
+)
+	@assert layout in (:overlay, :trellis) "Layout must be :overlay or :trellis."
+	@assert columns > 0 "Trellis columns must be positive."
+	expanded = _expand(series)
+	if position === nothing
+		panel_count = length(unique(s.panel for s in expanded))
+		ncols = min(columns, panel_count)
+		default_size = to_value(Makie.theme(:size))
+		size_options = layout == :trellis && panel_count > 0 ?
+			(size=(ncols * default_size[1], cld(panel_count, ncols) * default_size[2]),) : (;)
+		fig = Figure(; size_options..., figure...)
+		position = fig[1, 1]
+	end
+	return ModelPlotting.plotseries(position, expanded; layout, columns, kwargs...)
+end
+
 function ModelPlotting.plotseries(
+	position::Union{Makie.GridPosition,Makie.GridSubposition},
 	series::AbstractVector{<:AbstractSeries};
 	title="",
 	xlabel="",
 	ylabel=nothing,
-	figure=(;),
 	axis=(;),
 	legend=nothing,
-	alternating_dash=nothing,
+	decorate=nothing,
+	layout=:overlay,
+	columns::Integer=3,
+	panel_titles=nothing,
+	linkx::Bool=true,
+	linky::Bool=false,
+	labels=nothing,
+	styles=nothing,
 	kwargs...,
 )
-	expanded = AbstractSeries[]
-	for s0 in series, s in ModelPlotting.expand(s0)
-		push!(expanded, s)
+	@assert layout in (:overlay, :trellis) "Layout must be :overlay or :trellis."
+	expanded = _expand(series)
+	layout == :trellis && return _trellis(position, expanded;
+		title, xlabel, ylabel, axis, legend, decorate, columns, panel_titles, linkx, linky, labels, styles, kwargs...)
+	ax = Axis(position; title, xlabel, ylabel=something(ylabel, _default_ylabel(expanded)), axis...)
+	fig = ax.parent
+	ModelPlotting.plotseries!(ax, expanded; labels, styles, kwargs...)
+	return _finish(fig, ax, expanded, legend, decorate)
+end
+
+_subset(::Nothing, indices) = nothing
+_subset(values, indices) = values[indices]
+
+function _trellis(position, series; columns, title, panel_titles, linkx, linky, labels, styles, kwargs...)
+	@assert columns > 0 "Trellis columns must be positive."
+	panels = unique(s.panel for s in series)
+	@assert !isempty(panels) "A trellis plot needs at least one series."
+	titles = panel_titles === nothing ? [ModelPlotting._line_label(panel...) for panel in panels] : panel_titles
+	@assert length(titles) == length(panels) "Supply one title per panel."
+	labels === nothing || @assert length(labels) == length(series) "Supply one label per line."
+	styles === nothing || @assert length(styles) == length(series) "Supply one style per line."
+	grid = GridLayout(position)
+	fig = Makie.get_top_parent(grid)
+	offset = isempty(title) ? 0 : 1
+	isempty(title) || Label(grid[1, 1:min(columns, length(panels))], title; font=:bold)
+	axes = Axis[]
+	for (n, panel) in enumerate(panels)
+		indices = findall(s -> s.panel == panel, series)
+		# Each panel owns a nested layout, so its legend cannot occupy another panel.
+		cell = GridLayout(grid[offset + cld(n, columns), mod1(n, columns)])
+		ModelPlotting.plotseries(cell[1, 1], series[indices]; title=titles[n],
+			labels=_subset(labels, indices), styles=_subset(styles, indices), kwargs...)
+		push!(axes, content(cell[1, 1]))
 	end
-	fig = Figure(; figure...)
-	ax = Axis(fig[1, 1]; title, xlabel, ylabel=something(ylabel, _default_ylabel(expanded)), axis...)
-	for (s, lbl) in zip(expanded, _legend_labels(expanded))
-		lines!(ax, s; label=lbl, kwargs...)
-	end
-	return _finish(fig, ax, expanded, legend, alternating_dash)
+	linkx && linkxaxes!(axes...)
+	linky && linkyaxes!(axes...)
+	return fig
 end
 
 ModelPlotting.plotseries(s::AbstractSeries; kwargs...) = ModelPlotting.plotseries([s]; kwargs...)
+ModelPlotting.plotseries(position::Union{Makie.GridPosition,Makie.GridSubposition}, s::AbstractSeries; kwargs...) =
+	ModelPlotting.plotseries(position, [s]; kwargs...)
 
 end

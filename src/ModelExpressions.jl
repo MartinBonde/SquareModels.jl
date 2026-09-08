@@ -486,6 +486,8 @@ _value(db, x::SparseZeroArray) = SparseZeroArray(_value(db, x.data), map(copy, x
 _value(db, x::SparseAxisArray{<:Number}) = x
 _value(db, x::SparseAxisArray) = _map_stored((key, value) -> _value(db, value), x)
 _value(db, x::AbstractArray{<:Number}) = x
+_value(db, x::LabeledArray) = LabeledArray(_value(db, x.data), x.dims, x.name)
+_value(db, x::LabeledArray{<:Number}) = x
 _value(db, x::Tuple) = map(y -> _value(db, y), x)
 
 _with_periods(x, periods) = periods === nothing ? x : _slice_periods(x, periods)
@@ -703,7 +705,7 @@ function _macro_parts(args)
 	length(args) == 3 && _is_op_literal(args[1]) && _is_period_literal(args[2]) && return (args[1], nothing, nothing, args[3], true, args[2])
 	length(args) == 3 && _is_period_literal(args[1]) && return (default_operator, args[2], nothing, args[3], false, args[1])
 	length(args) == 3 && return (args[1], args[2], nothing, args[3], false, nothing)
-	length(args) == 4 && _is_op_literal(args[1]) && _is_period_literal(args[2]) && return (args[1], args[3], nothing, args[4], false, args[2])
+	length(args) == 4 && return (args[1], args[3], nothing, args[4], false, args[2])
 	error("expected `expr`, `op expr`, `periods expr`, `db expr`, `op db expr`, or `op periods db expr`")
 end
 
