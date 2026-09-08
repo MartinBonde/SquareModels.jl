@@ -221,6 +221,41 @@ end
 	@test_throws AssertionError plotseries!(ax, series; labels=["One"])
 end
 
+@testset "Complete sparse time slices use labelled arithmetic" begin
+	m = Model()
+	SquareModels.@variables m begin
+		s[i=[:a, :b], t=2020:2022; i == :a || t != 2021]
+		d[i=[:a, :b], t=2020:2022]
+	end
+	db = ModelDictionary(m)
+	db[s] .= 6.0
+	db[d] .= 2.0
+	set_default_source!(db)
+	set_default_periods!(2020:2022)
+	try
+		@test collect(@evalexpr(s[:a,:] / d[:a,:])) == [3, 3, 3]
+		@test collect(@evalexpr(d[:a,:] - s[:a,:])) == [-4, -4, -4]
+		@test collect(@evalexpr(sum(s[i,:] for i in [:a]) / d[:a,:])) == [3, 3, 3]
+		weights = db[s[:a,2020:2022]]
+		@test collect(@evalexpr(s[:a,:] * $weights / d[:a,:])) == [18, 18, 18]
+		fig = @plot(s[:a,:] / d[:a,:]; legend=false)
+		@test [p[1] for p in only(Makie.content(fig[1, 1]).scene.plots)[1][]] == [2020, 2021, 2022]
+		alias = d[:a,:]
+		sparse_alias = s[:a,:]
+		set_default_periods!(2021:2022)
+		@test collect(@evalexpr(alias)) == [2, 2]
+		@test collect(@evalexpr(sparse_alias)) == [6, 6]
+		set_default_periods!(2020:2022)
+		gapped = @evalexpr(s[:b,:])
+		@test length(gapped) == 2
+		@test !haskey(gapped, (2021,))
+		db[s[:a,:]] .= [6, 12, 18]
+		@test collect(@evalexpr(s[:a,:] / d[:a,:])) == [3, 6, 9]
+	finally
+		reset_print_defaults!()
+	end
+end
+
 SquareModels.ModelPlotting.plotseries(series::Vector{SquareModels.LabeledSeries}; kwargs...) = series
 
 model = Model()

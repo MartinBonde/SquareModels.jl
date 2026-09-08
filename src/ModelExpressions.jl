@@ -477,8 +477,8 @@ _has_model_binding(db, name) = haskey(db.model, name) || haskey(db, String(name)
 _model_binding(db, name) = haskey(db.model, name) ? db.model[name] : db[name]
 
 function _lookup(db, name::Symbol, fallback, periods=nothing)
-	_has_model_binding(db, name) || return fallback()
-	return _with_periods(_model_binding(db, name), periods)
+	_has_model_binding(db, name) || return _expression_array(_fallback_periods(fallback(), periods))
+	return _expression_array(_with_periods(_model_binding(db, name), periods))
 end
 _value(db, x) = _restore_nothing(JuMP.value(v -> _nothing_to_na(db[v]), x))
 _value(db, x::SparseZeroArray{<:Number}) = x
@@ -491,16 +491,36 @@ _value(db, x::LabeledArray{<:Number}) = x
 _value(db, x::Tuple) = map(y -> _value(db, y), x)
 
 _with_periods(x, periods) = periods === nothing ? x : _slice_periods(x, periods)
+_fallback_periods(x, periods) = x
+_fallback_periods(x::JuMP.Containers.DenseAxisArray{<:JuMP.AbstractJuMPScalar}, periods) = _with_periods(x, periods)
+_fallback_periods(x::SparseZeroArray{<:JuMP.AbstractJuMPScalar}, periods) = _with_periods(x, periods)
+_fallback_periods(x::SparseAxisArray{<:JuMP.AbstractJuMPScalar}, periods) = _with_periods(x, periods)
+
+# A complete sparse time slice can use dense labelled arithmetic. Keep actual
+# gaps sparse, so transforms never create observations in unstored cells.
+_expression_array(x) = x
+function _expression_array(x::SparseZeroArray{T,1}) where {T}
+	length(x) == length(only(x.domain)) || return x
+	periods = _order_periods([only(key) for key in keys(x)])
+	return JuMP.Containers.DenseAxisArray([x[t] for t in periods], periods)
+end
+
+function _expression_array(w::Window{T,S}) where {T,S<:SparseZeroArray{<:Any,1}}
+	length(w) == length(only(w.indices.domain)) || return w
+	periods = _order_periods([only(key) for key in keys(w.indices)])
+	return JuMP.Containers.DenseAxisArray([w[t] for t in periods], periods)
+end
 _slice_periods(x, periods) = x
 _slice_periods(x::AbstractArray, periods) = x[ntuple(_ -> Colon(), ndims(x) - 1)..., periods]
 _slice_periods(x::Window, periods) = x[ntuple(_ -> Colon(), ndims(x) - 1)..., periods]
-_period_ref(base, periods, indices...) = periods === nothing ? base[indices...] : base[indices[1:end-1]..., periods]
+_period_ref(base, periods, indices...) = _expression_array(
+	periods === nothing ? base[indices...] : base[indices[1:end-1]..., periods])
 
 function _model_ref(db, name, fallback, periods, indices...)
 	_has_model_binding(db, name) || return fallback()[indices...]
 	base = _model_binding(db, name)
-	ndims(base) == length(indices) + 1 || return base[indices...]
-	return periods === nothing ? base[indices..., :] : base[indices..., periods]
+	ndims(base) == length(indices) + 1 || return _expression_array(base[indices...])
+	return _expression_array(periods === nothing ? base[indices..., :] : base[indices..., periods])
 end
 
 # Only arithmetic operators broadcast implicitly (`a * b` -> `a .* b`). Named
@@ -592,7 +612,7 @@ function _rewrite(ex, dbv, periodv=nothing, bound=())
 		isexpr(ex.args[2], :tuple) || return ex
 		return Expr(:., ex.args[1], Expr(:tuple, Any[_rewrite(a, dbv, periodv, bound) for a in ex.args[2].args]...))
 	elseif ex.head === :$
-		return ex.args[1]
+		return :($(GlobalRef(@__MODULE__, :_expression_array))($(ex.args[1])))
 	else
 		return Expr(ex.head, Any[_rewrite(a, dbv, periodv, bound) for a in ex.args]...)
 	end
