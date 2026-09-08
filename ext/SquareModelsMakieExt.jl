@@ -45,6 +45,11 @@ automatically when duplicate base labels are present; pass `alternating_dash=fal
 to disable or `alternating_dash=true` to force pairing of consecutive lines.
 """
 function ModelPlotting.alternating_dash!(ax, series)
+	_alternating_dash!([p for p in ax.scene.plots if p isa Makie.Lines], series)
+	return ax
+end
+
+function _alternating_dash!(plots, series)
 	labels = _base_label.(series)
 	groups = unique(labels)
 	if length(groups) == length(labels)
@@ -56,23 +61,22 @@ function ModelPlotting.alternating_dash!(ax, series)
 	end
 	colors = _palette_colors()
 	seen = zeros(Int, length(groups))
-	plots = [p for p in ax.scene.plots if p isa Makie.Lines]
 	for (p, g) in zip(plots, byplot)
 		seen[g] += 1
 		p.color = colors[mod1(g, length(colors))]
 		p.linestyle = _LINESTYLES[mod1(seen[g], length(_LINESTYLES))]
 	end
-	return ax
+	return plots
 end
 
-function _apply_alternating_dash!(ax, series, alternating_dash)
+function _apply_alternating_dash!(plots, series, alternating_dash)
 	alternating_dash === false && return
 	auto = alternating_dash === nothing
 	if auto
 		labels = _base_label.(series)
 		length(unique(labels)) == length(labels) && return
 	end
-	ModelPlotting.alternating_dash!(ax, series)
+	_alternating_dash!(plots, series)
 end
 
 # An explicit legend choice overrides the organisation's default legend.
@@ -109,7 +113,7 @@ function ModelPlotting.plotvar(
 )
 	ls = ModelPlotting.expand(w)
 	name = w.varname === nothing ? "" : String(w.varname)
-	labels = label === nothing ? nothing : [label]
+	labels = label === nothing || length(ls) != 1 ? nothing : [label]
 	return ModelPlotting.plotseries(ls; title=something(title, name), labels, kwargs...)
 end
 
@@ -126,7 +130,7 @@ function ModelPlotting.plotseries!(
 	styles = styles === nothing ? fill((;), length(expanded)) : styles
 	@assert length(labels) == length(styles) == length(expanded) "Supply one label and style per line."
 	plots = [lines!(ax, s; label, kwargs...) for (s, label) in zip(expanded, labels)]
-	_apply_alternating_dash!(ax, expanded, alternating_dash)
+	_apply_alternating_dash!(plots, expanded, alternating_dash)
 	# Explicit per-series styles take precedence over the default dash cycle.
 	for (plot, style) in zip(plots, styles), (key, value) in pairs(style)
 		plot[key] = value

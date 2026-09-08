@@ -160,6 +160,11 @@ Comparisons with a reference:
 - `:q` — percent deviation, ``100(x_t/b_t-1)``.
 - `:mp` — difference between the source and reference percent growth rates.
 
+When both results carry index labels, these comparisons match all indices,
+including years. They retain the source observations and return `NaN` where the
+reference has no matching observation. Growth rates are computed on each
+source's own periods before comparison.
+
 Reference transformations:
 
 - `:r`, `:rn` — reference level, ``b_t``.

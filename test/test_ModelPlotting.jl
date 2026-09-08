@@ -36,6 +36,17 @@ end
 	@test length(fig.content) == 2
 end
 
+@testset "plotvar labels for single and multiple lines" begin
+	m = Model()
+	JuMP.@variable(m, amount[[:north, :south], 2020:2022])
+	db = ModelDictionary(m)
+	db[amount] .= 1.0
+	fig = plotvar(db[amount]; label="Custom", legend=false)
+	@test [p.label[] for p in Makie.content(fig[1, 1]).scene.plots] == ["amount[north]", "amount[south]"]
+	fig = plotvar(db[amount[:north, :]]; label="Custom", legend=false)
+	@test only(Makie.content(fig[1, 1]).scene.plots).label[] == "Custom"
+end
+
 @testset "Makie extension legend and finalize hook" begin
 	series = [labeled([1.0, 2.0], "demo"), labeled([2.0, 3.0], "demo2")]
 	has_legend(fig) = any(c isa Makie.Legend for c in fig.content)
@@ -219,6 +230,61 @@ end
 	@test lines[1].color[] == Makie.to_color(:red)
 	@test lines[2].linewidth[] == 5
 	@test_throws AssertionError plotseries!(ax, series; labels=["One"])
+end
+
+@testset "Adding styled lines preserves existing plots" begin
+	for alternating_dash in (nothing, true)
+		fig = Makie.Figure()
+		ax = Makie.Axis(fig[1, 1])
+		existing = Makie.lines!(ax, [1.0, 2.0]; color=:black, linestyle=:dash)
+		old_color, old_style = existing.color[], copy(existing.linestyle[])
+		series = [labeled([2.0, 3.0], "a"), labeled([3.0, 4.0], "a")]
+		lines = plotseries!(ax, series; alternating_dash)
+		@test existing.color[] == old_color
+		@test existing.linestyle[] == old_style
+		@test lines[1].color[] == lines[2].color[]
+		@test lines[1].linestyle[] === nothing
+		@test lines[2].linestyle[] isa AbstractVector
+		styled = plotseries!(ax, series; styles=[(color=:red,), (linestyle=:solid,)])
+		@test styled[1].color[] == Makie.to_color(:red)
+		@test styled[2].linestyle[] === nothing
+		@test lines[2].linestyle[] isa AbstractVector
+	end
+end
+
+@testset "Reference comparisons retain sparse year labels" begin
+	function sparse_source(periods; omitted=nothing, scale=1.0)
+		m = Model()
+		SquareModels.@variables m begin s[t=periods; t != omitted] end
+		db = ModelDictionary(m)
+		for t in periods
+			t == omitted || (db[s[t]] = scale * (t - 2019))
+		end
+		return db
+	end
+	baseline = sparse_source(2020:2022)
+	scenario = sparse_source(2021:2023; scale=10.0)
+	difference = @evalexpr :m baseline=>scenario s
+	@test difference.dims == ([2021, 2022, 2023],)
+	@test isequal(collect(difference), [18.0, 27.0, NaN])
+	@test isequal(collect(@evalexpr(:q, baseline=>scenario, s)), [900.0, 900.0, NaN])
+	growth = collect(@evalexpr(:mp, baseline=>scenario, s))
+	@test isnan(growth[1]) && isnan(growth[3])
+	@test growth[2] ≈ 0.0 atol=1e-10
+	for op in (:m, :q, :mp)
+		fig = @plot(op, nothing, baseline=>scenario, s; legend=false)
+		points = only(Makie.content(fig[1, 1]).scene.plots)[1][]
+		@test [p[1] for p in points] == [2021, 2022, 2023]
+		@test isequal([p[2] for p in points], Float32.(collect(@evalexpr(op, nothing, baseline=>scenario, s))))
+	end
+
+	# Conversion may make just one side dense. Gaps and missing keys must survive.
+	gapped = sparse_source(2020:2022; omitted=2021)
+	complete = sparse_source(2020:2022; scale=10.0)
+	@test isequal(collect(@evalexpr(:m, gapped=>complete, s)), [9.0, NaN, 27.0])
+	result = @evalexpr :q complete=>gapped s
+	@test Set(keys(result)) == Set([(2020,), (2022,)])
+	@test result[2020] == result[2022] == -90.0
 end
 
 @testset "Complete sparse time slices use labelled arithmetic" begin

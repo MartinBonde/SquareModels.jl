@@ -74,6 +74,7 @@ Base.show(io::IO, a::LabeledArray) = show(io, MIME"text/plain"(), a)
 
 """Axis label collections for `x`, or `nothing` when `x` carries no labels."""
 _axis_labels(x::JuMP.Containers.DenseAxisArray) = axes(x)
+_axis_labels(x::LabeledArray) = x.dims
 _axis_labels(x::Window{<:Any,<:_SparseTableArray}) = nothing
 _axis_labels(x::Window) = axes(x.indices)
 _axis_labels(_) = nothing
@@ -367,13 +368,27 @@ _gdif(x::_SparseTableArray) = _dif(_pch(x))
 _log(x::_SparseTableArray) = _map_stored((key, value) -> log(_to_float(value)), x)
 _ldif(x::_SparseTableArray) = _dif(_log(x))
 
-_difference(x, ref) = _as_numeric(x) .- _as_numeric(ref)
-_difference(x::_SparseTableArray, ref::_SparseTableArray) = _zip_stored(-, x, ref)
-_deviation(x, ref) = (_as_numeric(x) ./ _as_numeric(ref) .- 1) .* 100
-_deviation(x::_SparseTableArray, ref::_SparseTableArray) =
-	_zip_stored((value, base) -> (value / base - 1) * 100, x, ref)
-_growth_difference(x, ref) = _pch(x) .- _pch(ref)
-_growth_difference(x::_SparseTableArray, ref::_SparseTableArray) = _zip_stored(-, _pch(x), _pch(ref))
+_comparison_keys(x) = nothing
+_comparison_keys(x::JuMP.Containers.DenseAxisArray) = Iterators.product(axes(x)...)
+_comparison_keys(x::_SparseTableArray) = keys(_stored_pairs(x))
+_comparison_keys(x::LabeledArray) = x.dims === nothing ? _comparison_keys(x.data) : Iterators.product(x.dims...)
+
+# Reference comparisons follow labels even when a complete sparse slice has
+# become dense. Only source observations are emitted; absent reference keys are NaN.
+function _zip_reference(f, x, ref)
+	xkeys, refkeys = _comparison_keys(x), _comparison_keys(ref)
+	(xkeys === nothing || refkeys === nothing) && return f.(_as_numeric(x), _as_numeric(ref))
+	values = Dict(key => _to_float(value) for (key, value) in zip(refkeys, ref))
+	source = x isa LabeledArray ? x.data : x
+	if source isa _SparseTableArray
+		return _map_stored((key, value) -> f(_to_float(value), get(values, key, NaN)), source)
+	end
+	return [f(value, get(values, key, NaN)) for (key, value) in zip(xkeys, _as_numeric(x))]
+end
+
+_difference(x, ref) = _zip_reference(-, x, ref)
+_deviation(x, ref) = _zip_reference((value, base) -> (value / base - 1) * 100, x, ref)
+_growth_difference(x, ref) = _zip_reference(-, _relabel(_pch(x), x), _relabel(_pch(ref), ref))
 
 function _need_ref(op)
 	op in (:m, :q, :mp, :r, :rn, :rd, :rp, :rdp, :rl, :rdl)

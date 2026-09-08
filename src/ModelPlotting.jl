@@ -236,15 +236,25 @@ _period_match(x, periods) = periods isa Union{AbstractArray,Tuple,AbstractRange}
 # Label each series with the source text the user wrote (with any `@.` expanded).
 _label_text(ex) = string(_expand_dot_macro(ex))
 
+function _line_transform(op, s, ref, reflines, i)
+	if op in (:m, :q, :mp) && reflines !== nothing
+		index = findfirst(r -> r.panel[2] == s.panel[2], reflines)
+		index === nothing && return fill(NaN, length(s.y))
+		r = reflines[index]
+		# Keep years until reference operators have aligned the observations.
+		return collect(_transform(op, LabeledArray(s.y, (s.x,)), LabeledArray(r.y, (r.x,))))
+	end
+	return _transform(op, s.y, reflines === nothing ? ref : reflines[i].y)
+end
+
 function _op_lines(ops, x::AbstractSeries, ref, label, xfrom, periods)
 	out = LabeledSeries[]
 	for op in _expand_ops(ops)
 		xlines = expand(x)
 		reflines = _need_ref(op) ? _ref_lines(ref, op) : nothing
 		for (i, s) in enumerate(xlines)
-			r = reflines === nothing ? ref : reflines[i].y
 			line_label = length(xlines) == 1 ? label : s.label
-			push!(out, _filter_periods(LabeledSeries(s.x, _transform(op, s.y, r), line_label, op,
+			push!(out, _filter_periods(LabeledSeries(s.x, _line_transform(op, s, ref, reflines, i), line_label, op,
 				(label, s.panel[2])), periods))
 		end
 	end
@@ -262,9 +272,8 @@ function _op_lines(ops, x::AbstractArray, ref, label, xfrom, periods)
 		xlines = _lines(x, label, xfrom)
 		reflines = _need_ref(op) ? _lines(_ref_value(ref, op), label, xfrom) : nothing
 		for (i, s) in enumerate(xlines)
-			r = reflines === nothing ? ref : reflines[i].y
 			line_label = length(xlines) == 1 ? label : s.label
-			push!(out, _filter_periods(LabeledSeries(s.x, _transform(op, s.y, r), line_label, op,
+			push!(out, _filter_periods(LabeledSeries(s.x, _line_transform(op, s, ref, reflines, i), line_label, op,
 				(label, s.panel[2])), periods))
 		end
 	end
