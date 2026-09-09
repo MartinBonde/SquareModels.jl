@@ -56,6 +56,31 @@ nothing
 
 ## Plotting Expressions
 
+To place several plots in one figure, pass a grid position to `plotseries`:
+
+```julia
+fig = Figure(size=(900, 400))
+plotseries(fig[1, 1], data[qGDP]; title="Real GDP", legend=false)
+plotseries(fig[1, 2], data[qC]; title="Real consumption", legend=false)
+```
+
+Both forms of `plotseries` return the containing `Figure`. Use
+`content(fig[1, 1])` to get an axis for annotations or style changes.
+
+`@plot` accepts the same keyword options, including `position` for a figure grid:
+
+```julia
+periods = 2020:2024
+options = (legend=false, linewidth=3)
+fig = Figure(size=(900, 400))
+@plot(:n, periods, data, qGDP; position=fig[1, 1], title="Real GDP", options...)
+@plot(:p, periods, data, qC; position=fig[1, 2], title="Consumption growth", options...)
+```
+
+Use four positional arguments to pass the operator and periods as local variables.
+The explicit periods take precedence over the print defaults. Dense arrays returned by
+`@evalexpr` keep their year labels when passed to `@plot` with `$values`.
+
 [`@plot`](@ref) resolves bare variable names against a model dictionary and labels
 each plotted expression with the source text:
 
@@ -135,6 +160,11 @@ Comparisons with a reference:
 - `:q` — percent deviation, ``100(x_t/b_t-1)``.
 - `:mp` — difference between the source and reference percent growth rates.
 
+When both results carry index labels, these comparisons match all indices,
+including years. They retain the source observations and return `NaN` where the
+reference has no matching observation. Growth rates are computed on each
+source's own periods before comparison.
+
 Reference transformations:
 
 - `:r`, `:rn` — reference level, ``b_t``.
@@ -212,11 +242,9 @@ fonts, grid, and figure size. By default a native legend is added with
 `legend=true` for `axislegend(ax)` with default placement, or a NamedTuple like
 `legend=(position=:cb,)` to customise it.
 
-For organisation-specific layout (coloured labels below the chart, alternating
-dashes, extra annotations), register a **finalize hook** — a function
-`f(fig, ax, series)` called after the lines are drawn. When a hook is set, the
-default native legend is skipped so the hook can supply its own (an explicit
-`legend=true`/NamedTuple still applies):
+For an organisation's default legend, register a function `f(fig, ax, series)`.
+Explicit `legend=false`, `legend=true`, a NamedTuple, or a per-plot legend function
+overrides this default. Thus `legend=false` also disables a theme's legend:
 
 ```julia
 using CairoMakie
@@ -230,9 +258,55 @@ set_plot_finalize!(MyOrgMakieTheme.colored_text_legend!)
 reset_plot_finalize!()
 ```
 
-A finalize function receives the figure, the axis, and the expanded line list
-(a `Vector` of `AbstractSeries`) and can add legends or annotations and adjust
-the layout.
+The function receives the figure, axis, and expanded series. Its return value
+is ignored. Use `decorate=(ax, series) -> ...` for annotations that should also
+appear when the legend is disabled. Each series supplies its numeric `x` and `y`
+values, so annotations do not need to read plotted coordinates.
+
+## Trellis plots
+
+Set source, periods, and operator once for a report. All three expression macros
+use these settings when you omit their corresponding arguments:
+
+```julia
+set_default_source!(baseline => scenario)
+set_default_periods!(2020:2050)
+set_default_operator!(:q)
+
+@plot(emissions; layout=:trellis, columns=3)
+@plot([qGDP, qC]; layout=:trellis, columns=2,
+    panel_titles=["Real GDP", "Consumption"])
+@plot(:an, emissions; layout=:trellis, columns=3)
+```
+
+A panel groups one expression and one combination of leading indices. Different
+sources and operators for that group stay on the same axes. Sparse data create
+panels for stored index combinations; gaps remain gaps. Panel order follows the
+expressions and index order, independently of legend labels.
+
+Panels share x limits by default and use separate y limits. Use `linkx=false` or
+`linky=true` to change this. `columns` sets the row width. The default figure size
+scales the active theme's size by the number of rows and columns; `figure=(size=...,)`
+overrides it. Each panel owns a nested grid for its axis and theme legend.
+
+`plotseries` accepts the same `layout=:trellis` options, also at an existing grid
+position. All figure builders return the containing Makie `Figure`.
+
+## Labels, styles, and existing axes
+
+Pass `labels` and `styles` in expanded line order. Each style is a NamedTuple of
+Makie line options. These explicit styles override the automatic dash cycle:
+
+```julia
+@plot(:an, qGDP;
+    labels=["Scenario", "Baseline"],
+    styles=[(color=:red,), (color=:gray, linestyle=:dash)],
+    decorate=(ax, series) -> vlines!(ax, [2025]))
+```
+
+For numeric series, `plotseries!(ax, series; ...)` adds lines to an existing axis
+and returns their handles. It does not add a legend or change the axis labels.
+Use `labeled(values, name)` or `LabeledSeries(years, values, name)` to supply data.
 
 ### Alternating dash for repeated variables
 

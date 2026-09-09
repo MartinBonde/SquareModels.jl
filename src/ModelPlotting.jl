@@ -28,9 +28,11 @@ module ModelPlotting
 using Base.Meta: isexpr
 import ..AbstractSeries   # shared supertype with `Window` (defined in the parent module)
 import ..Window
+import .._SparseTableArray, .._table_layout
+using ..ModelExpressions: LabeledArray
 using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _default_periods, _expand_dot_macro, _expand_ops, _macro_parts, _need_ref, _op_axis_label, _ref_expr, _ref_value, _rewrite, _transform, _value_expr
 
-export @plot, plotvar, plotseries, labeled, LabeledSeries, alternating_dash!
+export @plot, plotvar, plotseries, plotseries!, labeled, LabeledSeries, alternating_dash!
 export set_plot_finalize!, reset_plot_finalize!, plot_finalize
 
 const _plot_finalize = Ref{Union{Nothing,Function}}(nothing)
@@ -39,8 +41,9 @@ const _plot_finalize = Ref{Union{Nothing,Function}}(nothing)
     set_plot_finalize!(f)
     set_plot_finalize!(nothing)
 
-Register `f(fig, ax, series)` to run after `plotvar`/`plotseries` draw the axis and lines.
-Use for custom legends, dash patterns, annotations, etc.
+Register the default legend function `f(fig, ax, series)` for plot builders.
+An explicit `legend=false`, `true`, NamedTuple, or function overrides this default.
+Use the per-plot `decorate(ax, series)` keyword for annotations.
 """
 set_plot_finalize!(f::Function) = (_plot_finalize[] = f; f)
 set_plot_finalize!(::Nothing) = (_plot_finalize[] = nothing; nothing)
@@ -60,7 +63,7 @@ end
     plotvar(window; kwargs...)
     plotvar(data::ModelDictionary, variable; kwargs...)
 
-Plot one model variable and return `(figure, axis, series)`.
+Plot one model variable and return its Makie `Figure`.
 
 Load a Makie backend such as CairoMakie before calling this function. Keywords
 configure the title, axis, legend, line style, and underlying Makie figure.
@@ -69,14 +72,17 @@ plotvar(args...; kwargs...) = _plotting_error(:plotvar, args)
 
 """
     plotseries(series; kwargs...)
+    plotseries(position, series; kwargs...)
 
-Plot one or more [`AbstractSeries`](@ref) values and return
-`(figure, axis, series)`.
+Plot one or more [`AbstractSeries`](@ref) values and return their Makie `Figure`.
+Pass a Makie grid position, such as `fig[1, 2]`, to add an axis to an existing figure.
 
 Load a Makie backend such as CairoMakie before calling this function. A single
 series or a vector of series is accepted.
 """
 plotseries(args...; kwargs...) = _plotting_error(:plotseries, args)
+"""Draw series on an existing Makie axis and return the created line handles."""
+plotseries!(args...; kwargs...) = _plotting_error(:plotseries!, args)
 alternating_dash!(args...; kwargs...) = _plotting_error(:alternating_dash!, args)
 
 """Convert a value to Float64, mapping `nothing` to `NaN` (like missing data)."""
@@ -120,8 +126,9 @@ struct LabeledSeries <: AbstractSeries
 	y::Vector{Float64}
 	label::String
 	op::Symbol
+	panel::Tuple{String,Tuple}
 end
-LabeledSeries(x, y, label) = LabeledSeries(x, y, label, :n)
+LabeledSeries(x, y, label, op=:n) = LabeledSeries(x, y, label, op, (label, ()))
 
 to_series(s::LabeledSeries) = (s.x, s.y)
 axis_of(s::LabeledSeries) = s.x
@@ -142,12 +149,22 @@ function expand(w::Window)
 	out = LabeledSeries[]
 	for combo in Iterators.product(dk[1:end-1]...)
 		y = Float64[_to_float(w[combo..., t]) for t in xaxis]
-		push!(out, LabeledSeries(collect(x), y, _line_label(name, combo)))
+		push!(out, LabeledSeries(collect(x), y, _line_label(name, combo), :n, (name, combo)))
 	end
 	return out
 end
 
 to_series(w::Window) = (s = only(expand(w)); (s.x, s.y))
+
+# Sparse layouts contain only live leading-index combinations. A gap stays NaN.
+function _layout_lines(layout, name)
+	x = _coerce_axis(collect(layout.periods))
+	return [LabeledSeries(x,
+		[isequal(v, "") ? NaN : _to_float(v) for v in layout.data[:, j]],
+		_line_label(name, combo), :n, (name, combo))
+		for (j, combo) in enumerate(layout.combos)]
+end
+expand(w::Window{<:Any,<:_SparseTableArray}) = _layout_lines(_table_layout(w), something(w.varname, ""))
 
 """
     labeled(values, label; xfrom=())
@@ -161,7 +178,7 @@ back to `1:length` when no axis is available.
 
 Use directly for programmatic plotting:
 ```julia
-plot([labeled(db[v] .* db[other], "\$v*\$other") for v in vars])
+plotseries([labeled(db[v] .* db[other], "\$v*\$other") for v in vars])
 ```
 """
 function labeled(values, label; xfrom=())
@@ -186,16 +203,23 @@ _lines(v::AbstractSeries, label, xfrom) = expand(v)
 _lines(v::AbstractArray, label, xfrom) = _array_lines(v, label, xfrom)
 _lines(v, label, xfrom) = [labeled(v, label; xfrom)]
 
+_plot_axes(v::AbstractArray) = axes(v)
+_plot_axes(v::LabeledArray) = v.dims
+
+_array_lines(v::LabeledArray{T,N,A}, label, xfrom) where {T,N,A<:_SparseTableArray} =
+	_layout_lines(_table_layout(v.data), label)
+_array_lines(v::_SparseTableArray, label, xfrom) = _layout_lines(_table_layout(v), label)
+
 function _array_lines(v::AbstractArray, label, xfrom)
-	dims = axes(v)
+	dims = _plot_axes(v)
 	ndims(v) == 0 && return [labeled(only(v), label; xfrom)]
 	ndims(v) <= 1 && return [LabeledSeries(_coerce_axis(collect(dims[end])), Float64[_to_float(y) for y in Array(v)], string(label))]
 	idx_dims = axes(v)
 	x = _coerce_axis(collect(dims[end]))
 	out = LabeledSeries[]
-	for combo in Iterators.product(idx_dims[1:end-1]...)
+	for (combo, labels) in zip(Iterators.product(idx_dims[1:end-1]...), Iterators.product(dims[1:end-1]...))
 		y = Float64[_to_float(v[combo..., t]) for t in idx_dims[end]]
-		push!(out, LabeledSeries(collect(x), y, _line_label(label, combo)))
+		push!(out, LabeledSeries(collect(x), y, _line_label(label, labels), :n, (label, labels)))
 	end
 	return out
 end
@@ -204,7 +228,7 @@ function _filter_periods(s::LabeledSeries, periods)
 	periods === nothing && return s
 	keep = [_period_match(x, periods) for x in s.x]
 	any(keep) || return s
-	return LabeledSeries(s.x[keep], s.y[keep], s.label, s.op)
+	return LabeledSeries(s.x[keep], s.y[keep], s.label, s.op, s.panel)
 end
 
 _period_match(x, periods) = periods isa Union{AbstractArray,Tuple,AbstractRange} ? x in periods : x == periods
@@ -212,15 +236,26 @@ _period_match(x, periods) = periods isa Union{AbstractArray,Tuple,AbstractRange}
 # Label each series with the source text the user wrote (with any `@.` expanded).
 _label_text(ex) = string(_expand_dot_macro(ex))
 
+function _line_transform(op, s, ref, reflines, i)
+	if op in (:m, :q, :mp) && reflines !== nothing
+		index = findfirst(r -> r.panel[2] == s.panel[2], reflines)
+		index === nothing && return fill(NaN, length(s.y))
+		r = reflines[index]
+		# Keep years until reference operators have aligned the observations.
+		return collect(_transform(op, LabeledArray(s.y, (s.x,)), LabeledArray(r.y, (r.x,))))
+	end
+	return _transform(op, s.y, reflines === nothing ? ref : reflines[i].y)
+end
+
 function _op_lines(ops, x::AbstractSeries, ref, label, xfrom, periods)
 	out = LabeledSeries[]
 	for op in _expand_ops(ops)
 		xlines = expand(x)
 		reflines = _need_ref(op) ? _ref_lines(ref, op) : nothing
 		for (i, s) in enumerate(xlines)
-			r = reflines === nothing ? ref : reflines[i].y
 			line_label = length(xlines) == 1 ? label : s.label
-			push!(out, _filter_periods(LabeledSeries(s.x, _transform(op, s.y, r), line_label, op), periods))
+			push!(out, _filter_periods(LabeledSeries(s.x, _line_transform(op, s, ref, reflines, i), line_label, op,
+				(label, s.panel[2])), periods))
 		end
 	end
 	return out
@@ -237,15 +272,15 @@ function _op_lines(ops, x::AbstractArray, ref, label, xfrom, periods)
 		xlines = _lines(x, label, xfrom)
 		reflines = _need_ref(op) ? _lines(_ref_value(ref, op), label, xfrom) : nothing
 		for (i, s) in enumerate(xlines)
-			r = reflines === nothing ? ref : reflines[i].y
 			line_label = length(xlines) == 1 ? label : s.label
-			push!(out, _filter_periods(LabeledSeries(s.x, _transform(op, s.y, r), line_label, op), periods))
+			push!(out, _filter_periods(LabeledSeries(s.x, _line_transform(op, s, ref, reflines, i), line_label, op,
+				(label, s.panel[2])), periods))
 		end
 	end
 	return out
 end
 
-_with_op(s::LabeledSeries, op) = LabeledSeries(s.x, s.y, s.label, op)
+_with_op(s::LabeledSeries, op) = LabeledSeries(s.x, s.y, s.label, op, s.panel)
 
 function _op_lines(ops, x, ref, label, xfrom, periods)
 	out = LabeledSeries[]
@@ -259,6 +294,15 @@ end
 # ----------------------------------------------------------------------------------------------------------------------
 # @plot macro
 # ----------------------------------------------------------------------------------------------------------------------
+
+_plot_keyword(ex::Symbol) = Expr(:kw, ex, esc(ex))
+_plot_keyword(ex::Expr) = ex.head === :... ? Expr(:..., esc(only(ex.args))) :
+	Expr(:kw, ex.args[1], esc(ex.args[2]))
+
+function _plot_call(series, keywords)
+	return Expr(:call, GlobalRef(@__MODULE__, :plotseries),
+		Expr(:parameters, _plot_keyword.(keywords)...), series)
+end
 
 _series_expr(item, dbv, refv, periodv, ops, oplines_ref) = begin
 	bases = _collect_bases(item)
@@ -280,6 +324,7 @@ end
     @plot periods expr
     @plot op periods expr
     @plot ops db [expr1, expr2, ...]
+    @plot(op, periods, db, expr; kwargs...)
 
 Plot one or more expressions of model variables, resolving bare names against the
 ModelDictionary `db` and labelling each series with its source text.
@@ -301,14 +346,27 @@ Bare identifiers are treated as variables of `db`; use `\$(value)` to inject
 values from the surrounding scope (e.g. `@plot db qGDP / \$base`). Arithmetic
 operators are broadcast implicitly; named calls (e.g. `sum`, `log`) are left as
 written, so use explicit dots like `log.(x)` for elementwise functions.
+
+Keyword options pass to `plotseries`. Use `position=fig[row, column]` to draw in
+an existing figure. In the four-argument form, `op` and `periods` can be local variables.
 """
 macro plot(args...)
-	ops, db, ref, expr, use_defaults, periods = _macro_parts(args)
+	keywords = Any[]
+	positional = Any[]
+	for arg in args
+		if isexpr(arg, :parameters)
+			append!(keywords, arg.args)
+		elseif isexpr(arg, :(=))
+			push!(keywords, arg)
+		else
+			push!(positional, arg)
+		end
+	end
+	ops, db, ref, expr, use_defaults, periods = _macro_parts(positional)
 	dbv = gensym(:db)
 	refv = gensym(:ref)
 	periodv = gensym(:periods)
 	oplines_ref = GlobalRef(@__MODULE__, :_op_lines)
-	plotseries_ref = GlobalRef(@__MODULE__, :plotseries)
 	default_periods_ref = GlobalRef(@__MODULE__, :_default_periods)
 	period_arg = periods === nothing ? :($default_periods_ref()) : esc(periods)
 	if use_defaults
@@ -325,7 +383,7 @@ macro plot(args...)
 						$append_ref($linesv, $(esc(arg)))
 					end
 				end
-				$plotseries_ref($linesv)
+				$(_plot_call(linesv, keywords))
 			end
 		end
 	end
@@ -334,13 +392,13 @@ macro plot(args...)
 	arg = _series_arg(expr, dbv, refv, periodv, ops, oplines_ref)
 	body = quote
 		let $(esc(dbv)) = $(esc(primary)), $(esc(periodv)) = $period_arg
-			$plotseries_ref($(esc(arg)))
+			$(_plot_call(esc(arg), keywords))
 		end
 	end
 	ref === nothing && return body
 	return quote
 		let $(esc(dbv)) = $(esc(primary)), $(esc(refv)) = $(esc(ref)), $(esc(periodv)) = $period_arg
-			$plotseries_ref($(esc(arg)))
+			$(_plot_call(esc(arg), keywords))
 		end
 	end
 end

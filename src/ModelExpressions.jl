@@ -74,6 +74,7 @@ Base.show(io::IO, a::LabeledArray) = show(io, MIME"text/plain"(), a)
 
 """Axis label collections for `x`, or `nothing` when `x` carries no labels."""
 _axis_labels(x::JuMP.Containers.DenseAxisArray) = axes(x)
+_axis_labels(x::LabeledArray) = x.dims
 _axis_labels(x::Window{<:Any,<:_SparseTableArray}) = nothing
 _axis_labels(x::Window) = axes(x.indices)
 _axis_labels(_) = nothing
@@ -367,13 +368,27 @@ _gdif(x::_SparseTableArray) = _dif(_pch(x))
 _log(x::_SparseTableArray) = _map_stored((key, value) -> log(_to_float(value)), x)
 _ldif(x::_SparseTableArray) = _dif(_log(x))
 
-_difference(x, ref) = _as_numeric(x) .- _as_numeric(ref)
-_difference(x::_SparseTableArray, ref::_SparseTableArray) = _zip_stored(-, x, ref)
-_deviation(x, ref) = (_as_numeric(x) ./ _as_numeric(ref) .- 1) .* 100
-_deviation(x::_SparseTableArray, ref::_SparseTableArray) =
-	_zip_stored((value, base) -> (value / base - 1) * 100, x, ref)
-_growth_difference(x, ref) = _pch(x) .- _pch(ref)
-_growth_difference(x::_SparseTableArray, ref::_SparseTableArray) = _zip_stored(-, _pch(x), _pch(ref))
+_comparison_keys(x) = nothing
+_comparison_keys(x::JuMP.Containers.DenseAxisArray) = Iterators.product(axes(x)...)
+_comparison_keys(x::_SparseTableArray) = keys(_stored_pairs(x))
+_comparison_keys(x::LabeledArray) = x.dims === nothing ? _comparison_keys(x.data) : Iterators.product(x.dims...)
+
+# Reference comparisons follow labels even when a complete sparse slice has
+# become dense. Only source observations are emitted; absent reference keys are NaN.
+function _zip_reference(f, x, ref)
+	xkeys, refkeys = _comparison_keys(x), _comparison_keys(ref)
+	(xkeys === nothing || refkeys === nothing) && return f.(_as_numeric(x), _as_numeric(ref))
+	values = Dict(key => _to_float(value) for (key, value) in zip(refkeys, ref))
+	source = x isa LabeledArray ? x.data : x
+	if source isa _SparseTableArray
+		return _map_stored((key, value) -> f(_to_float(value), get(values, key, NaN)), source)
+	end
+	return [f(value, get(values, key, NaN)) for (key, value) in zip(xkeys, _as_numeric(x))]
+end
+
+_difference(x, ref) = _zip_reference(-, x, ref)
+_deviation(x, ref) = _zip_reference((value, base) -> (value / base - 1) * 100, x, ref)
+_growth_difference(x, ref) = _zip_reference(-, _relabel(_pch(x), x), _relabel(_pch(ref), ref))
 
 function _need_ref(op)
 	op in (:m, :q, :mp, :r, :rn, :rd, :rp, :rdp, :rl, :rdl)
@@ -477,8 +492,8 @@ _has_model_binding(db, name) = haskey(db.model, name) || haskey(db, String(name)
 _model_binding(db, name) = haskey(db.model, name) ? db.model[name] : db[name]
 
 function _lookup(db, name::Symbol, fallback, periods=nothing)
-	_has_model_binding(db, name) || return fallback()
-	return _with_periods(_model_binding(db, name), periods)
+	_has_model_binding(db, name) || return _expression_array(_fallback_periods(fallback(), periods))
+	return _expression_array(_with_periods(_model_binding(db, name), periods))
 end
 _value(db, x) = _restore_nothing(JuMP.value(v -> _nothing_to_na(db[v]), x))
 _value(db, x::SparseZeroArray{<:Number}) = x
@@ -486,19 +501,41 @@ _value(db, x::SparseZeroArray) = SparseZeroArray(_value(db, x.data), map(copy, x
 _value(db, x::SparseAxisArray{<:Number}) = x
 _value(db, x::SparseAxisArray) = _map_stored((key, value) -> _value(db, value), x)
 _value(db, x::AbstractArray{<:Number}) = x
+_value(db, x::LabeledArray) = LabeledArray(_value(db, x.data), x.dims, x.name)
+_value(db, x::LabeledArray{<:Number}) = x
 _value(db, x::Tuple) = map(y -> _value(db, y), x)
 
 _with_periods(x, periods) = periods === nothing ? x : _slice_periods(x, periods)
+_fallback_periods(x, periods) = x
+_fallback_periods(x::JuMP.Containers.DenseAxisArray{<:JuMP.AbstractJuMPScalar}, periods) = _with_periods(x, periods)
+_fallback_periods(x::SparseZeroArray{<:JuMP.AbstractJuMPScalar}, periods) = _with_periods(x, periods)
+_fallback_periods(x::SparseAxisArray{<:JuMP.AbstractJuMPScalar}, periods) = _with_periods(x, periods)
+
+# A complete sparse time slice can use dense labelled arithmetic. Keep actual
+# gaps sparse, so transforms never create observations in unstored cells.
+_expression_array(x) = x
+function _expression_array(x::SparseZeroArray{T,1}) where {T}
+	length(x) == length(only(x.domain)) || return x
+	periods = _order_periods([only(key) for key in keys(x)])
+	return JuMP.Containers.DenseAxisArray([x[t] for t in periods], periods)
+end
+
+function _expression_array(w::Window{T,S}) where {T,S<:SparseZeroArray{<:Any,1}}
+	length(w) == length(only(w.indices.domain)) || return w
+	periods = _order_periods([only(key) for key in keys(w.indices)])
+	return JuMP.Containers.DenseAxisArray([w[t] for t in periods], periods)
+end
 _slice_periods(x, periods) = x
 _slice_periods(x::AbstractArray, periods) = x[ntuple(_ -> Colon(), ndims(x) - 1)..., periods]
 _slice_periods(x::Window, periods) = x[ntuple(_ -> Colon(), ndims(x) - 1)..., periods]
-_period_ref(base, periods, indices...) = periods === nothing ? base[indices...] : base[indices[1:end-1]..., periods]
+_period_ref(base, periods, indices...) = _expression_array(
+	periods === nothing ? base[indices...] : base[indices[1:end-1]..., periods])
 
 function _model_ref(db, name, fallback, periods, indices...)
 	_has_model_binding(db, name) || return fallback()[indices...]
 	base = _model_binding(db, name)
-	ndims(base) == length(indices) + 1 || return base[indices...]
-	return periods === nothing ? base[indices..., :] : base[indices..., periods]
+	ndims(base) == length(indices) + 1 || return _expression_array(base[indices...])
+	return _expression_array(periods === nothing ? base[indices..., :] : base[indices..., periods])
 end
 
 # Only arithmetic operators broadcast implicitly (`a * b` -> `a .* b`). Named
@@ -590,7 +627,7 @@ function _rewrite(ex, dbv, periodv=nothing, bound=())
 		isexpr(ex.args[2], :tuple) || return ex
 		return Expr(:., ex.args[1], Expr(:tuple, Any[_rewrite(a, dbv, periodv, bound) for a in ex.args[2].args]...))
 	elseif ex.head === :$
-		return ex.args[1]
+		return :($(GlobalRef(@__MODULE__, :_expression_array))($(ex.args[1])))
 	else
 		return Expr(ex.head, Any[_rewrite(a, dbv, periodv, bound) for a in ex.args]...)
 	end
@@ -703,7 +740,7 @@ function _macro_parts(args)
 	length(args) == 3 && _is_op_literal(args[1]) && _is_period_literal(args[2]) && return (args[1], nothing, nothing, args[3], true, args[2])
 	length(args) == 3 && _is_period_literal(args[1]) && return (default_operator, args[2], nothing, args[3], false, args[1])
 	length(args) == 3 && return (args[1], args[2], nothing, args[3], false, nothing)
-	length(args) == 4 && _is_op_literal(args[1]) && _is_period_literal(args[2]) && return (args[1], args[3], nothing, args[4], false, args[2])
+	length(args) == 4 && return (args[1], args[3], nothing, args[4], false, args[2])
 	error("expected `expr`, `op expr`, `periods expr`, `db expr`, `op db expr`, or `op periods db expr`")
 end
 

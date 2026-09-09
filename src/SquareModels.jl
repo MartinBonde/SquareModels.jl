@@ -19,7 +19,7 @@ export solve, solve!, diagnose, annotate_lst!, square_model
 export Tag, description, tags, has_tag, tagged, metadata
 export SparseZeroArray, select_axes, merge_indices, ∑, use_sparse_zero_array!
 export KeyedData
-export ModelExpressions, ModelPlotting, @plot, @evalexpr, @prt, plotvar, plotseries, alternating_dash!, labeled, LabeledSeries, LabeledArray, MultiVarResult, AbstractSeries, set_plot_finalize!, reset_plot_finalize!, plot_finalize
+export ModelExpressions, ModelPlotting, @plot, @evalexpr, @prt, plotvar, plotseries, plotseries!, alternating_dash!, labeled, LabeledSeries, LabeledArray, MultiVarResult, AbstractSeries, set_plot_finalize!, reset_plot_finalize!, plot_finalize
 export set_default_source!, set_default_operator!, set_default_periods!, set_column_label_total_width!, reset_print_defaults!
 
 """
@@ -1760,7 +1760,7 @@ include("solve.jl")
 include("ModelExpressions.jl")
 include("ModelPlotting.jl")
 using .ModelExpressions: @evalexpr, @prt, LabeledArray, MultiVarResult, set_default_source!, set_default_operator!, set_default_periods!, set_column_label_total_width!, reset_print_defaults!
-using .ModelPlotting: @plot, plotvar, plotseries, alternating_dash!, labeled, LabeledSeries, set_plot_finalize!, reset_plot_finalize!, plot_finalize
+using .ModelPlotting: @plot, plotvar, plotseries, plotseries!, alternating_dash!, labeled, LabeledSeries, set_plot_finalize!, reset_plot_finalize!, plot_finalize
 
 # Define _get_model for ModelDictionary (after ModelDictionaries.jl is included)
 _get_model(md::ModelDictionary) = md.model
