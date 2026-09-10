@@ -29,7 +29,7 @@ call [`add_missing_model_variables!`](@ref) or index the dictionary to sync new 
 
 # Fields
 - `model::AbstractModel`: The JuMP model whose variables are tracked
-- `dictionary::Dictionary{String, Union{Nothing, Number}}`: Storage for variable values
+- `dictionary`: Typed values with shared, immutable name indices
 
 # Examples
 ```julia
@@ -55,22 +55,38 @@ d2 = load("data.parquet", model)
 
 See also: [`fix`](@ref), [`set_start_value`](@ref), [`value_dict`](@ref), [`load`](@ref), [`unload`](@ref)
 """
-struct ModelDictionary
-	model::AbstractModel
-	dictionary::Dictionary{String, Union{Nothing, Number}}
-	_synced_n_vars::Base.RefValue{Int}
-	ModelDictionary(model, dictionary) = new(model, dictionary, Ref(0))
+mutable struct ModelDictionary{T,M,L,V<:AbstractVariableRef}
+	model::M
+	dictionary::Dictionary{String,Union{Nothing,T}}
+	_layout::L
+	_revision::UInt
+	_full::Bool
+	_variables::Vector{V}
+	_variable_positions::Union{Nothing,Dict{MOI.VariableIndex,Int}}
 end
-@forward ModelDictionary.dictionary (
-	Base.keys,
-	Base.values,
-	Base.isassigned,
-	Base.length,
-	Base.iterate,
-	Base.filter,
-	Base.haskey,
-	Base.get,
-)
+
+include("ModelDictionaryStorage.jl")
+Base.keys(d::ModelDictionary) = (_ensure_data_snapshot!(d); keys(d.dictionary))
+Base.values(d::ModelDictionary) = (_ensure_data_snapshot!(d); values(d.dictionary))
+Base.length(d::ModelDictionary) = (_ensure_data_snapshot!(d); length(d.dictionary))
+Base.eltype(::Type{<:ModelDictionary{T}}) where {T} = Union{Nothing,T}
+Base.isassigned(d::ModelDictionary, args...) = (_ensure_data_snapshot!(d); isassigned(d.dictionary, args...))
+Base.haskey(d::ModelDictionary, key) = (_ensure_data_snapshot!(d); haskey(d.dictionary, key))
+Base.get(d::ModelDictionary, key, default) = (_ensure_data_snapshot!(d); get(d.dictionary, key, default))
+Base.filter(f, d::ModelDictionary) = (_ensure_data_snapshot!(d); filter(f, d.dictionary))
+function Base.iterate(d::ModelDictionary)
+	_ensure_data_snapshot!(d)
+	result = iterate(d.dictionary)
+	result === nothing && return nothing
+	value, state = result
+	return value, (d.dictionary, state)
+end
+function Base.iterate(::ModelDictionary, (dictionary, state))
+	result = iterate(dictionary, state)
+	result === nothing && return nothing
+	value, next_state = result
+	return value, (dictionary, next_state)
+end
 
 function Base.show(io::IO, md::ModelDictionary)
 	n = length(md)
@@ -111,11 +127,7 @@ fix(d)  # Fix all variables to their values in d
 
 See also: [`fix`](@ref), [`set_start_value`](@ref), [`value_dict`](@ref)
 """
-function ModelDictionary(m)
-	md = ModelDictionary(m, Dictionary{String, Union{Nothing, Number}}())
-	add_missing_model_variables!(md)
-	return md
-end
+ModelDictionary(m::AbstractModel) = ModelDictionary{Float64}(m)
 
 """
     ModelDictionary(model::AbstractModel, values::Union{Number, AbstractVector})
@@ -131,14 +143,13 @@ A `ModelDictionary` with variables initialized to the given values.
 """
 function ModelDictionary(m::AbstractModel, values::Union{Number, AbstractVector})
 	d = ModelDictionary(m)
-	setindex!.(Ref(d), values, all_variables(m))
+	_set_initial_values!(d, values)
 	return d
 end
 
 function Base.copy(md::ModelDictionary)
-	copy_md = ModelDictionary(md.model, copy(md.dictionary))
-	copy_md._synced_n_vars[] = md._synced_n_vars[]
-	return copy_md
+	_ensure_data_layout!(md)
+	return _derived_dictionary(md, copy(md.dictionary.values))
 end
 
 """
@@ -152,74 +163,59 @@ to ensure the dictionary includes all model variables.
 New variables are initialized to `nothing`.
 """
 function add_missing_model_variables!(md::ModelDictionary)
-	n = JuMP.num_variables(md.model)
-	n == md._synced_n_vars[] && return
-	for v in all_variables(md.model)
-		k = name(v)
-		if k ∉ keys(md.dictionary)
-			insert!(md.dictionary, k, nothing)
-		end
-	end
-	md._synced_n_vars[] = n
+	_ensure_data_layout!(md; expand=true)
+	return md
 end
 
 function Base.setindex!(d::ModelDictionary, value, index::String)
-	index ∈ keys(d.dictionary) || add_missing_model_variables!(d)
+	_ensure_data_layout!(d)
+	found, token = gettoken(keys(d.dictionary), index)
+	if found
+		settokenvalue!(d.dictionary, token, convert(eltype(d.dictionary), value))
+		return value
+	end
 	sym = Symbol(index)
-	index ∉ keys(d.dictionary) && haskey(d.model, sym) && return setindex!(d, value, d.model[sym])
-	return setindex!(d.dictionary, value, index)
+	haskey(d.model, sym) && return setindex!(d, value, d.model[sym])
+	throw(KeyError(index))
 end
-Base.setindex!(d::ModelDictionary, value, index::AbstractVariableRef) = setindex!(d, value, name(index))
+function Base.setindex!(d::ModelDictionary, value, index::AbstractVariableRef)
+	_ensure_data_layout!(d)
+	d.dictionary.values[_variable_position(d, index)] = value
+	return value
+end
 Base.setindex!(d::ModelDictionary, value, index::Symbol) = setindex!(d, value, String(index))
-Base.setindex!(d::ModelDictionary, value, index::AbstractArray) = setindex!.(Ref(d), value, index)
+function Base.setindex!(d::ModelDictionary, value, index::AbstractArray)
+	_set_window!(d[index], value)
+	return value
+end
 
 function Base.getindex(d::ModelDictionary, index::String)
-	index ∈ keys(d.dictionary) || add_missing_model_variables!(d)
-	index ∈ keys(d.dictionary) && return getindex(d.dictionary, index)
+	_ensure_data_layout!(d)
+	found, token = gettoken(keys(d.dictionary), index)
+	found && return gettokenvalue(d.dictionary, token)
 	sym = Symbol(index)
 	haskey(d.model, sym) && return getindex(d, d.model[sym])
-	return d.dictionary[index] # IndexError
+	throw(KeyError(index))
 end
-Base.getindex(d::ModelDictionary, index::AbstractVariableRef) = getindex(d, name(index))
+function Base.getindex(d::ModelDictionary, index::AbstractVariableRef)
+	_ensure_data_layout!(d)
+	return d.dictionary.values[_variable_position(d, index)]
+end
 Base.getindex(d::ModelDictionary, index::Symbol) = getindex(d, String(index))
 function Base.getindex(d::ModelDictionary, container::AbstractArray{<:AbstractString}, varname::Union{Nothing, AbstractString}=nothing)
-	add_missing_model_variables!(d)
-	idx = indexin(String[container...], [keys(d.dictionary)...])
-	data_view = @view(d.dictionary.values[idx])
-	return create_window(data_view, container, varname)
-end
-function Base.getindex(d::ModelDictionary, container::SparseZeroArray{<:AbstractVariableRef})
-	add_missing_model_variables!(d)
-	idx = indexin([name(variable) for variable in container], [keys(d.dictionary)...])
-	data_view = @view(d.dictionary.values[idx])
-	varname = isempty(container) ? nothing : split(name(first(container)), "[")[1]
-	return create_window(data_view, container, varname)
-end
-Base.setindex!(d::ModelDictionary, value, s::SparseZeroArray) = setindex!(d, value, s.data)
-
-function Base.getindex(d::ModelDictionary, container::AbstractArray{<:AbstractVariableRef})
-	if isempty(container)
-		data_view = @view(d.dictionary.values[Int[]])
-		return create_window(data_view, container, nothing)
-	end
-	varname = split(name(first(container)), "[")[1]
-	getindex(d, name.(container), varname)
+	return d[_container_selection(d, container, varname)]
 end
 function Base.getindex(d::ModelDictionary, container::AbstractArray)
-	if isempty(container)
-		data_view = @view(d.dictionary.values[Int[]])
-		return create_window(data_view, container, nothing)
-	end
-	return getindex(d, string.(container), nothing)
+	return d[_container_selection(d, container)]
 end
 
 # Filtering with a boolean ModelDictionary (e.g., d[d .> 0])
 function Base.getindex(d::ModelDictionary, mask::ModelDictionary)
-	ks = collect(keys(d.dictionary))
-	vs = collect(values(d.dictionary))
-	mask_vs = collect(values(mask.dictionary))
-	selected = mask_vs .== true
-	ModelDictionary(d.model, Dictionary(ks[selected], vs[selected]))
+	_ensure_data_layout!(d)
+	_ensure_data_layout!(mask)
+	_assert_aligned(d, mask)
+	selected = findall(x -> x === true, mask.dictionary.values)
+	return _subset_dictionary(d, selected)
 end
 
 
@@ -265,6 +261,13 @@ function create_window(data_view, container, varname::Union{Nothing, AbstractStr
 	end
 	Window(data_view, indices, varname)
 end
+function create_window(data_view, container::DenseAxisArray, varname::Union{Nothing, AbstractString}=nothing)
+	# Broadcasting a DenseAxisArray shares its axes and lookup tables. Prepared
+	# selections need independent coordinates even if the source labels change.
+	positions = reshape(collect(1:length(container)), size(container.data))
+	indices = DenseAxisArray(positions, map(copy, axes(container))...; names=container.names)
+	return Window(data_view, indices, varname)
+end
 function create_window(data_view, container::SparseZeroArray, varname::Union{Nothing, AbstractString}=nothing)
 	indices = similar(container, Int)
 	for (i, key) in enumerate(keys(container))
@@ -274,6 +277,8 @@ function create_window(data_view, container::SparseZeroArray, varname::Union{Not
 end
 
 function Base.getproperty(w::Window, name::Symbol)
+	# Public views may be saved for later evaluation, so retain their storage
+	# checks. Bulk operations unwrap the values after validating the view.
 	name == :shaped_view && return reshape(w.data_view, size(w.indices))
 	return getfield(w, name)
 end
@@ -286,18 +291,26 @@ end
 	Base.keys,
 	Base.lastindex,
 )
-@forward Window.shaped_view (
-	Base.iterate,
-	Base.collect,
-)
-Base.iterate(w::Window{<:Any,<:_SparseTableArray}, state...) = iterate(w.data_view, state...)
-Base.collect(w::Window{<:Any,<:_SparseTableArray}) = collect(w.data_view)
+Base.collect(w::Window) = collect(reshape(_window_storage(w), size(w.indices)))
+# Keep the validated storage in the iteration state, avoiding a model-layout
+# check for every cell during a traversal. Iteration order is flat for both
+# dense and sparse windows; collect retains the dense window's shape.
+function _iterate_window(storage, state...)
+	next = iterate(storage, state...)
+	isnothing(next) && return nothing
+	value, next_state = next
+	return value, (storage, next_state)
+end
+Base.iterate(w::Window) = _iterate_window(_window_storage(w))
+Base.iterate(::Window, state::Tuple) = _iterate_window(state[1], state[2])
+Base.collect(w::Window{<:Any,<:_SparseTableArray}) = collect(_window_storage(w))
 
 _table_layout(w::Window) = _table_layout(w.shaped_view, axes(w.indices))
 function _table_layout(w::Window{<:Any,<:_SparseTableArray})
+	storage = _window_storage(w)
 	sparse = _sparse_axis_array(w.indices)
 	keys = collect(Base.keys(sparse.data))
-	values = [w.data_view[w.indices[key...]] for key in keys]
+	values = [storage[w.indices[key...]] for key in keys]
 	return _sparse_table_layout(keys, values)
 end
 
@@ -320,12 +333,16 @@ Base.getindex(w::Window, index::AbstractArray) = length(index) == 1 ? getindex(w
 _window_slice(w::Window, index::Integer) = w.data_view[index]
 # A Window holds data, not an expression, so an unstored cell reads as no
 # observation. `Zero()` is only the additive identity for equation building.
-_window_slice(::Window, ::Zero) = nothing
-_window_slice(w::Window, indices::AbstractArray) = map(i -> w.data_view[i], Array(indices))
+_window_slice(w::Window, ::Zero) = (_window_storage(w); nothing)
+function _window_slice(w::Window, indices::AbstractArray)
+	storage = _window_storage(w)
+	return map(i -> storage[i], Array(indices))
+end
 function _window_slice(w::Window, indices::SparseAxisArray)
-	values = similar(indices, eltype(w.data_view))
+	storage = _window_storage(w)
+	values = similar(indices, eltype(storage))
 	for key in keys(indices.data)
-		values[key] = w.data_view[indices[key]]
+		values[key] = storage[indices[key]]
 	end
 	return values
 end
@@ -335,7 +352,7 @@ _window_slice(w::Window, indices::SparseZeroArray) =
 Base.getindex(w::Window, indices...) = _window_slice(w, w.indices[indices...])
 
 Base.setindex!(w::Window, value, index::AbstractArray) = setindex!.(Ref(w), value, index)
-Base.setindex!(w::Window, value, indices...) = setindex!.(Ref(w.data_view), value, w.indices[indices...])
+Base.setindex!(w::Window, value, indices...) = setindex!.(Ref(_window_storage(w)), value, w.indices[indices...])
 
 # Additional array methods for Window
 Base.vec(w::Window) = vec(collect(w))
@@ -344,7 +361,7 @@ Base.vec(w::Window) = vec(collect(w))
 Base.broadcastable(w::Window{<:Any,<:_SparseTableArray}) = _window_slice(w, w.indices)
 Base.broadcastable(w::Window) = w.shaped_view
 
-# For broadcast assignment (w .= x), materialize into the underlying data.
+# For broadcast assignment (w .= x), write into the underlying data.
 # Keyed sparse sources align by index tuple. An unstored source key is `nothing`.
 _window_keys(indices::SparseAxisArray) = keys(indices.data)
 _window_keys(indices::SparseZeroArray) = eachindex(indices)
@@ -357,37 +374,99 @@ _source_at(s::SparseAxisArray, key::Tuple) = get(s.data, key, nothing)
 _set_window!(w::Window, source::SparseZeroArray) = _set_window!(w, source.data)
 _set_window!(w::Window, source::SparseAxisArray) = _assign_keyed_source!(w, source)
 _set_window!(w::Window, source::KeyedData) = _assign_keyed_source!(w, source)
+# Dense labelled inputs are positional, like ordinary arrays. Their numeric
+# buffer has ordinary axes and supports flattening without interpreting labels.
+_set_window!(w::Window, source::DenseAxisArray) = _set_window!(w, source.data)
+# JuMP eagerly evaluates DenseAxisArray broadcasts, so dotted assignment can
+# receive the labelled array itself instead of a Broadcasted expression.
+Base.materialize!(w::Window, source::DenseAxisArray) = _set_window!(w, source)
 function _set_window!(w::Window, source::AbstractArray)
-	w.data_view .= vec(source)
+	storage = _window_storage(w)
+	storage .= _window_unalias_arg(storage, vec(source))
 	return w
 end
 function _set_window!(w::Window, value)
-	w.data_view .= value
+	storage = _window_storage(w)
+	storage .= value
 	return w
 end
+function _set_window!(w::Window, value::Union{Number,Nothing})
+	fill!(_window_storage(w), value)
+	return w
+end
+_set_window!(w::Window, source::Window) = _set_window!(w, Base.broadcastable(source))
 
 function _assign_keyed_source!(w::Window, source)
-	n_source = ndims(source)
-	n_target = ndims(w.indices)
-	n_target == n_source || error(
-		"Cannot assign sparse data with $n_source index axes to a window with $n_target index axes",
-	)
+	storage = _window_storage(w)
+	target_rank = ndims(w.indices)
+	source_rank = ndims(source)
+	source_rank == target_rank || throw(DimensionMismatch(
+		"Cannot assign sparse data with $source_rank index axes to a window with $target_rank index axes",
+	))
 	for key in _window_keys(w.indices)
 		idx = _index_tuple(key)
-		w.data_view[w.indices[idx...]] = _source_at(source, idx)
+		storage[w.indices[idx...]] = _source_at(source, idx)
 	end
 	return w
 end
 
-# `w .= source` routes here. A KeyedData source is a 0-dimensional broadcast, which
-# `Base.materialize` unwraps back to the KeyedData.
-Base.materialize!(w::Window, bc::Base.Broadcast.Broadcasted) =
-	_set_window!(w, Base.materialize(bc))
+# A window can contain repeated storage positions. Even an identical source view
+# must be snapshotted when it aliases the destination: otherwise `w .= w .+ 1`
+# increments a repeated cell twice. Nonaliasing sources need no intermediate.
+_window_unalias_arg(destination, arg) = arg
+function _window_unalias_arg(destination, arg::AbstractArray)
+	storage = _uncheck_model_array(arg)
+	return Base.mightalias(destination, storage) ? copy(storage) : storage
+end
+function _window_unalias_arg(destination, bc::Base.Broadcast.Broadcasted{Style}) where {Style}
+	args = map(arg -> _window_unalias_arg(destination, arg), bc.args)
+	return Base.Broadcast.Broadcasted{Style}(bc.f, args, bc.axes)
+end
 
-Base.in(index::String, d::ModelDictionary) = index ∈ keys(d.dictionary)
+# Array sources are assigned in linear order, independently of the window's
+# labelled shape. Matching the destination shape to the broadcast result lets
+# Base fuse the expression.
+function Base.materialize!(w::Window, bc::Base.Broadcast.Broadcasted{<:Base.Broadcast.DefaultArrayStyle})
+	storage = _window_storage(w)
+	instantiated = Base.Broadcast.instantiate(bc)
+	shape = map(length, axes(instantiated))
+	n = prod(shape)
+	if n == 1
+		value = instantiated[CartesianIndex(map(_ -> 1, shape))]
+		isempty(shape) && return _set_window!(w, value)
+		fill!(storage, value)
+		return w
+	end
+	n == length(storage) || throw(DimensionMismatch(
+		"Cannot assign $n values to a window with $(length(storage)) cells",
+	))
+	safe = _window_unalias_arg(storage, instantiated)
+	destination = length(shape) == 1 ? storage : reshape(storage, shape)
+	copyto!(destination, safe)
+	return w
+end
+
+# Custom sparse styles retain their key alignment and zero-preserving rules.
+# A direct keyed assignment can reuse its source without copying its cells.
+function Base.materialize!(w::Window, bc::Base.Broadcast.Broadcasted{Style}) where {Style}
+	if bc.f === identity && length(bc.args) == 1
+		source = only(bc.args)
+		if source isa Union{SparseZeroArray,SparseAxisArray,DenseAxisArray}
+			return _set_window!(w, source)
+		end
+	end
+	return _set_window!(w, Base.materialize(bc))
+end
+
+Base.in(index::String, d::ModelDictionary) = haskey(d, index)
 Base.in(index::Symbol, d::ModelDictionary) = String(index) ∈ d
-Base.in(index::AbstractVariableRef, d::ModelDictionary) = name(index) ∈ d
-Base.in(index::AbstractArray, d::ModelDictionary) = all(string.(index) .∈ Ref(d))
+function Base.in(index::AbstractVariableRef, d::ModelDictionary)
+	_ensure_data_snapshot!(d)
+	JuMP.owner_model(index) === d.model || return false
+	positions = d._full ? d._layout.id_to_slot : d._variable_positions
+	return haskey(positions, JuMP.index(index))
+end
+Base.in(index::AbstractArray, d::ModelDictionary) = all(v -> v in d, index)
 
 function Base.replace!(d::ModelDictionary, old_new::Pair...)
 	for (k, v) in zip(keys(d), replace(collect(d), old_new...))
@@ -405,24 +484,24 @@ end
 # JuMP extensions for ModelDictionary
 # ----------------------------------------------------------------------------------------------------------------------
 """
-    fix(var::VariableRef, d::ModelDictionary)
+    fix(var::AbstractVariableRef, d::ModelDictionary)
 
 Fix a single variable to its value in the dictionary.
 
 # Arguments
-- `var::VariableRef`: The variable to fix
+- `var::AbstractVariableRef`: The variable to fix
 - `d::ModelDictionary`: Dictionary containing the target value
 
 # Examples
 ```julia
 d = ModelDictionary(model)
 d[x] = 5.0
-fix(x, d)  # x is now fixed to 5.0
+fix(x, d)  # Fix x to 5.0.
 ```
 
 See also: [`ModelDictionary`](@ref), [`set_start_value`](@ref)
 """
-JuMP.fix(var::VariableRef, d::ModelDictionary) = fix(var, d[var], force=true)
+JuMP.fix(var::AbstractVariableRef, d::ModelDictionary) = fix(var, d[var], force=true)
 
 """
     fix(variables::AbstractArray, d::ModelDictionary)
@@ -441,9 +520,10 @@ JuMP.fix(variables::AbstractArray, d::ModelDictionary) = fix.(variables, Ref(d))
 
 Fix variables to their values in a `ModelDictionary`.
 
-When `d` contains every model variable (`length(d) == num_variables(model)`), all
-variables are fixed and each must have a non-`nothing` value. When `d` is a subset
-dictionary (e.g. from `d[d .> 0]`), only the keys present in `d` are fixed.
+`fix(d)` synchronizes the dictionary before fixing its variables by identity.
+A full dictionary includes newly added model variables, and each must have a
+non-`nothing` value. A subset dictionary (e.g. from `d[d .> 0]`) fixes only its
+selected variables. `fix(model, d)` requires values for every model variable.
 
 # Arguments
 - `model::AbstractModel`: The model whose variables to fix (optional if using `fix(d)`)
@@ -476,31 +556,25 @@ function JuMP.fix(model::AbstractModel, d::ModelDictionary)
 	end
 end
 function JuMP.fix(d::ModelDictionary)
-	n_model_vars = length(all_variables(d.model))
-	if length(d) == n_model_vars
-		# Full dictionary: require all variables to have values
-		fix(d.model, d)
-	else
-		# Subset dictionary: only fix variables present in the dictionary
-		for (k, v) in pairs(d.dictionary)
-			isnothing(v) && error("Cannot fix variable $k: no value in dictionary. Set it explicitly (e.g., to 0) before fixing.")
-			fix(variable_by_name(d.model, k), v, force=true)
-		end
+	_ensure_data_layout!(d)
+	for (var, v) in zip(d._variables, d.dictionary.values)
+		isnothing(v) && error("Cannot fix variable $(name(var)): no value in dictionary. Set it explicitly (e.g., to 0) before fixing.")
+		fix(var, v, force=true)
 	end
 end
 
 """
-    set_start_value(var::VariableRef, d::ModelDictionary)
+    set_start_value(var::AbstractVariableRef, d::ModelDictionary)
 
 Set the starting value of a variable from a ModelDictionary.
 
 # Arguments
-- `var::VariableRef`: The variable to set the start value for
+- `var::AbstractVariableRef`: The variable to set the start value for
 - `d::ModelDictionary`: Dictionary containing the start value
 
 See also: [`ModelDictionary`](@ref), [`fix`](@ref)
 """
-JuMP.set_start_value(var::VariableRef, values::ModelDictionary) = set_start_value(var, values[var]::Number)
+JuMP.set_start_value(var::AbstractVariableRef, values::ModelDictionary) = set_start_value(var, values[var]::Number)
 
 """
     set_start_value(variables::AbstractArray, d::ModelDictionary)
@@ -549,16 +623,10 @@ function JuMP.set_start_value(model::AbstractModel, d::ModelDictionary)
 	end
 end
 function JuMP.set_start_value(d::ModelDictionary)
-	n_model_vars = length(all_variables(d.model))
-	if length(d) == n_model_vars
-		# Full dictionary: require all variables to have values
-		set_start_value(d.model, d)
-	else
-		# Subset dictionary: only set start values for variables present in the dictionary
-		for (k, v) in pairs(d.dictionary)
-			isnothing(v) && error("Cannot set start value for $k: no value in dictionary. Set it explicitly before calling set_start_value.")
-			set_start_value(variable_by_name(d.model, k), v)
-		end
+	_ensure_data_layout!(d)
+	for (var, v) in zip(d._variables, d.dictionary.values)
+		isnothing(v) && error("Cannot set start value for $(name(var)): no value in dictionary. Set it explicitly before calling set_start_value.")
+		set_start_value(var, v)
 	end
 end
 
@@ -625,6 +693,8 @@ end
 Save a `ModelDictionary` to a Parquet file in the **simple format**.
 
 Each assigned entry becomes one row. Entries with `nothing` values are omitted.
+Storage is synchronized before export. After renaming or deleting model variables,
+call [`refresh_model_layout!`](@ref) first, as for ordinary dictionary access.
 
 | Column     | Description |
 |------------|-------------|
@@ -648,6 +718,7 @@ unload("solution.parquet", d)
 See also: [`load`](@ref), [`ModelDictionary`](@ref)
 """
 function unload(path::AbstractString, d::ModelDictionary)
+	_ensure_data_layout!(d)
 	rows = NamedTuple{(:variable, :indices, :value), Tuple{String, String, Float64}}[]
 	for (k, v) in pairs(d.dictionary)
 		isnothing(v) && continue
@@ -888,8 +959,18 @@ function _load_simple(df::DataFrame, model::AbstractModel, rename_dict::Dict{Str
 	end
 
 	d = ModelDictionary(model)
-	for var in all_variables(model)
-		base, indices = _var_to_key(var)
+	# The model's canonical file keys do not depend on the source or rename
+	# rules. Parse them once per layout revision, shared by every loaded dataset.
+	# The layout clears this cache whenever variables are renamed or changed.
+	model_keys = get!(d._layout.selection_cache, :SquareModels_load_keys) do
+		prepared = Vector{Tuple{String, String}}(undef, length(d._layout.variables))
+		for (slot, variable) in enumerate(d._layout.variables)
+			base, indices = _var_to_key(variable)
+			prepared[slot] = (String(base), String(indices))
+		end
+		prepared
+	end::Vector{Tuple{String, String}}
+	for (slot, (base, indices)) in enumerate(model_keys)
 
 		# Check for slice mapping first
 		if haskey(slice_dict, base)
@@ -902,9 +983,7 @@ function _load_simple(df::DataFrame, model::AbstractModel, rename_dict::Dict{Str
 			key = (lookup_base, indices)
 		end
 
-		if haskey(data_index, key)
-			d[var] = data_index[key]
-		end
+		d.dictionary.values[slot] = get(data_index, key, nothing)
 	end
 	return d
 end
@@ -1103,11 +1182,13 @@ struct ModelDictionaryStyle <: Broadcast.BroadcastStyle end
 Base.BroadcastStyle(::Type{<:ModelDictionary}) = ModelDictionaryStyle()
 Base.BroadcastStyle(::ModelDictionaryStyle, ::Broadcast.DefaultArrayStyle{0}) = ModelDictionaryStyle()
 Base.BroadcastStyle(s::ModelDictionaryStyle, ::ModelDictionaryStyle) = s
+# Model changes must be synchronized before broadcast axes are inferred.
+Base.Broadcast.instantiate(bc::Broadcast.Broadcasted{ModelDictionaryStyle}) = bc
 
 # ModelDictionary participates directly in broadcasting (not converted via collect)
 Base.broadcastable(md::ModelDictionary) = md
 Base.axes(md::ModelDictionary) = (Base.OneTo(length(md)),)
-Base.getindex(md::ModelDictionary, i::Int) = md.dictionary.values[i]
+Base.getindex(md::ModelDictionary, i::Int) = (_ensure_data_layout!(md); md.dictionary.values[i])
 
 # Find the first ModelDictionary in broadcast arguments (including nested Broadcasted)
 _find_model_dict(md::ModelDictionary) = md
@@ -1121,21 +1202,47 @@ function _find_model_dict(args::Tuple)
 	nothing
 end
 
-_bc_collect(md::ModelDictionary) = collect(md.dictionary.values)
-_bc_collect(x) = x
+_bc_values(md::ModelDictionary) = md.dictionary.values
+_bc_values(x) = x
+
+_validate_dictionary_broadcast(reference::ModelDictionary, arg) = nothing
+function _validate_dictionary_broadcast(reference::ModelDictionary, md::ModelDictionary)
+	_ensure_data_layout!(md)
+	_assert_aligned(reference, md)
+	return nothing
+end
+function _validate_dictionary_broadcast(reference::ModelDictionary, bc::Broadcast.Broadcasted)
+	foreach(arg -> _validate_dictionary_broadcast(reference, arg), bc.args)
+	return nothing
+end
+
+function _dictionary_values_broadcast(reference::ModelDictionary, bc::Broadcast.Broadcasted)
+	_ensure_data_layout!(reference)
+	_validate_dictionary_broadcast(reference, bc)
+	flat = Broadcast.flatten(bc)
+	# Borrow buffers; only the result of an allocating broadcast needs storage.
+	return Broadcast.broadcasted(_lift(flat.f), map(_bc_values, flat.args)...)
+end
 
 # Lift a function to propagate nothing (like NaN propagation)
 _lift(f) = (args...) -> any(isnothing, args) ? nothing : f(args...)
 
 function Base.copy(bc::Broadcast.Broadcasted{ModelDictionaryStyle})
 	md = _find_model_dict(bc.args)
-	flat = Broadcast.flatten(bc)
-	# Unwrap ModelDictionaries to their values, broadcast scalars normally
-	unwrapped = map(_bc_collect, flat.args)
-	# Lift the function to handle nothing values
-	new_values = broadcast(_lift(flat.f), unwrapped...)
-	ModelDictionary(md.model, Dictionary(keys(md.dictionary), new_values))
+	new_values = Base.materialize(_dictionary_values_broadcast(md, bc))
+	return _derived_dictionary(md, new_values)
 end
+
+function Base.copyto!(destination::ModelDictionary, bc::Broadcast.Broadcasted)
+	values_bc = _dictionary_values_broadcast(destination, bc)
+	# Base handles aliased views. Identical full value buffers are safe in place:
+	# unlike a Window, they cannot contain repeated destination positions.
+	Base.materialize!(destination.dictionary.values, values_bc)
+	return destination
+end
+
+Base.materialize!(destination::ModelDictionary, bc::Broadcast.Broadcasted) =
+	copyto!(destination, bc)
 
 # ==============================================================================
 # Comparison utilities

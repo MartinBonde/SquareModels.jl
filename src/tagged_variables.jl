@@ -22,7 +22,7 @@
 #   end
 #
 # Tags are trait-like markers for variable categorization.
-# Use JuMP.@variables for JuMP's original macro.
+# Use JuMP.@variables for JuMP's macro.
 
 # ==============================================================================
 # Tag Definition (Holy Trait Pattern)
@@ -481,7 +481,7 @@ Create JuMP variables with optional tags and descriptions.
 
 This is SquareModels' `@variables` macro. It adds variable metadata, sparse
 coordinate unpacking, and `SparseZeroArray` wrapping. Use `JuMP.@variables`
-for JuMP's original macro.
+for JuMP's macro.
 
 # Syntax
 

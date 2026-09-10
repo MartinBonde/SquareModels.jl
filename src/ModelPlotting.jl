@@ -160,7 +160,7 @@ to_series(w::Window) = (s = only(expand(w)); (s.x, s.y))
 function _layout_lines(layout, name)
 	x = _coerce_axis(collect(layout.periods))
 	return [LabeledSeries(x,
-		[isequal(v, "") ? NaN : _to_float(v) for v in layout.data[:, j]],
+		[ismissing(v) ? NaN : _to_float(v) for v in layout.data[:, j]],
 		_line_label(name, combo), :n, (name, combo))
 		for (j, combo) in enumerate(layout.combos)]
 end

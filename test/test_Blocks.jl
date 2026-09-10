@@ -1254,10 +1254,12 @@ end
 	@test last(test_constraints(custom_tolerances)).rtol == 0.02
 	@test assert_test_constraints(custom_tolerances, failing_data; atol=0, rtol=0)
 
-	legacy_syntax = @block m_bad begin
-		@test_constraint "legacy syntax" x, x == 1
+	for annotation in (:(@test_constraint "check" x, x == 1), :(@test_constraint x, x == 1))
+		@test_throws "on its own line before `variable, equation`" SquareModels._parse_block_expression(quote
+			$annotation
+			x, x == 1
+		end)
 	end
-	@test only(test_constraints(legacy_syntax)).message == "legacy syntax"
 
 	semicolon_syntax = @block m_bad begin
 		@test_constraint("semicolon syntax"; atol=0.02); x, x == 1.01

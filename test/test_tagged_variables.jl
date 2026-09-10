@@ -276,8 +276,8 @@ end
         @test description(db, :v) == "Test variable"
     end
 
-    @testset "JuMP.@variables still accessible" begin
-        # Users can still use JuMP's original macro if needed
+    @testset "JuMP.@variables is accessible" begin
+        # A qualified name selects JuMP's macro.
         model = Model()
         t = 2020:2022
 

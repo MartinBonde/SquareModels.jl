@@ -94,6 +94,95 @@ end
 	@test Set(l.label[] for l in lines) == Set(["qGDP <n>", "qGDP <p>"])
 end
 
+@testset "Percentage plot axes preserve small responses" begin
+	response(values, name="Response") = LabeledSeries(collect(1:length(values)), values, name, :q)
+	for values in ([0.0, 0.0], [-1e-12, 1e-12], [-0.02, 0.04], [NaN, 0.02])
+		ax = Makie.content(plotseries(response(values); legend=false)[1, 1])
+		@test ax.limits[][2] == (-0.05, 0.05)
+		line = only(ax.scene.plots)
+		@test isequal([p[2] for p in line[1][]], values)
+	end
+	ax = Makie.content(plotseries([response([0.01, 0.02]), response([-2.0, 1.0], "Other")]; legend=false)[1, 1])
+	@test ax.limits[][2] == (-2.3, 2.3)
+	labels = Makie.get_ticklabels(ax.ytickformat[], [-0.04, -0.02, 0.0, 0.02, 0.04])
+	@test allunique(String.(labels))
+	@test String(labels[4]) == "0.02%"
+	@test String(labels[5]) == "0.04%"
+	@test all(label -> endswith(String(label), "%"), labels)
+	for op in (:p, :pch, :dp, :gdif, :mp, :rp, :rdp)
+		ax = Makie.content(plotseries(LabeledSeries([1, 2], [0.01, 0.02], "Rate", op); legend=false)[1, 1])
+		@test String.(Makie.get_ticklabels(ax.ytickformat[], [0.01, 0.02])) == ["0.01%", "0.02%"]
+		@test ax.limits[] == (nothing, nothing)
+	end
+
+	fig = plotseries([response([0.0, 0.01]), response([-2.0, 1.0], "Other")]; layout=:trellis, legend=false)
+	axes = [ax for ax in fig.content if ax isa Makie.Axis]
+	@test [ax.limits[][2] for ax in axes] == [(-0.05, 0.05), (-2.3, 2.3)]
+	custom = values -> string.(values)
+	ax = Makie.content(plotseries(response([0.0, 0.01]); legend=false,
+		axis=(limits=(nothing, (-0.01, 0.02)), ytickformat=custom))[1, 1])
+	@test ax.limits[][2] == (-0.01, 0.02)
+	@test ax.ytickformat[] === custom
+	ax = Makie.content(plotseries(response([0.0, 0.01]); legend=false,
+		decorate=(ax, _) -> Makie.ylims!(ax, -1, 1))[1, 1])
+	@test ax.limits[][2] == (-1, 1)
+	for series in ([response([0.0, 0.01]), labeled([1.0, 2.0], "Level")], [response([NaN, NaN])])
+		ax = Makie.content(plotseries(series; legend=false)[1, 1])
+		@test ax.limits[] == (nothing, nothing)
+	end
+	fig = Makie.Figure()
+	ax = Makie.Axis(fig[1, 1]; limits=(nothing, (-1, 1)), ytickformat=custom)
+	plotseries!(ax, response([0.0, 0.01]))
+	@test ax.limits[][2] == (-1, 1)
+	@test ax.ytickformat[] === custom
+end
+
+@testset "Linked trellis response ranges cover every panel" begin
+	response(values, name, op=:q) = LabeledSeries([1, 2], values, name, op)
+	panel_axes(fig) = [ax for ax in fig.content if ax isa Makie.Axis]
+	yrange(rect) = (minimum(rect)[2], maximum(rect)[2])
+	small = response([0.0, 0.01], "Small")
+	large = response([-2.0, 1.0], "Large")
+	for series in ([small, large], [large, small])
+		axes = panel_axes(plotseries(series; layout=:trellis, linky=true, legend=false))
+		# Inspect the displayed ranges: ax.limits can retain per-axis settings
+		# even when linking has replaced targetlimits and finallimits.
+		@test all(ax -> yrange(ax.targetlimits[]) == (-2.3, 2.3), axes)
+		@test all(ax -> yrange(ax.finallimits[]) == (-2.3, 2.3), axes)
+		@test all(ax -> String.(Makie.get_ticklabels(ax.ytickformat[], [0.01])) == ["0.01%"], axes)
+		@test [p[2] for p in only(axes[2].scene.plots)[1][]] == series[2].y
+	end
+	for options in ((;), (; linky=false))
+		axes = panel_axes(plotseries([small, large]; layout=:trellis, legend=false, options...))
+		@test [yrange(ax.finallimits[]) for ax in axes] == [(-0.05, 0.05), (-2.3, 2.3)]
+	end
+
+	# Explicit settings and callbacks retain precedence over response defaults.
+	custom_format = values -> string.(values)
+	axes = panel_axes(plotseries([small, large]; layout=:trellis, linky=true, legend=false,
+		axis=(limits=(nothing, (-5.0, 5.0)), ytickformat=custom_format)))
+	@test all(ax -> yrange(ax.finallimits[]) == (-5.0, 5.0), axes)
+	@test all(ax -> ax.ytickformat[] === custom_format, axes)
+	axes = panel_axes(plotseries([small, large]; layout=:trellis, linky=true, legend=false,
+		decorate=(ax, _) -> Makie.ylims!(ax, -1.0, 1.0)))
+	@test all(ax -> yrange(ax.finallimits[]) == (-1.0, 1.0), axes)
+
+	level = response([-20.0, 10.0], "Level", :n)
+	for series in ([small, level], [level, small])
+		axes = panel_axes(plotseries(series; layout=:trellis, linky=true, legend=false))
+		@test all(ax -> ax.limits[][2] === nothing, axes)
+		ranges = [yrange(ax.finallimits[]) for ax in axes]
+		@test ranges[1] == ranges[2]
+		@test all(range -> range[1] <= -20.0 && range[2] >= 10.0, ranges)
+	end
+
+	# Symmetric linear defaults must not impose negative bounds on log scales.
+	axes = panel_axes(plotseries([response([1.0, 2.0], "Small"), response([10.0, 100.0], "Large")];
+		layout=:trellis, linky=true, legend=false, axis=(yscale=log10,)))
+	@test all(ax -> ax.limits[][2] === nothing, axes)
+	@test all(ax -> (range = yrange(ax.finallimits[]); 0 < range[1] <= 1.0 && range[2] >= 100.0), axes)
+end
+
 @testset "alternating_dash for repeated variables" begin
 	# Same base label twice (e.g. same variable from two sources): same color, different dash.
 	series = [labeled([1.0, 2.0], "qGDP"), SquareModels.LabeledSeries([1.0, 2.0], [2.0, 3.0], "qGDP", :r), labeled([3.0, 4.0], "qC")]
@@ -366,39 +455,38 @@ end
 	@test Array(@evalexpr(baseline, p[:firm, :] .* q[:firm, :])) == [30, 60]
 	@test Array(@evalexpr(baseline, p .* q)) == [2 4; 30 60]
 	@test Array(@evalexpr(baseline, (@. p * q))) == [2 4; 30 60]
-	@test Array(@prt(baseline, (@. p * q))) == [2 4; 30 60]
 	@test Array(@evalexpr(baseline, sum([L[l, :] for l in l]))) == [11, 22]
 	@test Array(@evalexpr(baseline, sum(L[l, :] for l in l))) == [11, 22]
 	@test Array(@evalexpr(baseline, sum(L[l] for l in l))) == [11, 22]
 	local_vector = [7, 8]
 	@test @evalexpr(baseline, local_vector[1]) == 7
-	@test @prt(baseline, [x, p[:hh, 2021] * q[:hh, 2021]]) == [3, 4]
-	multi_vector = @prt(:m, baseline=>shock, [p[:hh, :], q[:hh, :]])
+	@test @evalexpr(baseline, [x, p[:hh, 2021] * q[:hh, 2021]]) == [3, 4]
+	multi_vector = @evalexpr(:m, baseline=>shock, [p[:hh, :], q[:hh, :]])
 	@test multi_vector.names == ["p[:hh, :]", "q[:hh, :]"]
 	@test count(==("year"), split(sprint(show, MIME"text/plain"(), multi_vector))) == 1
-	mixed_dims_print = sprint(show, MIME"text/plain"(), @prt(:m, baseline=>shock, [p[:hh, :], q]))
+	mixed_dims_print = sprint(show, MIME"text/plain"(), @evalexpr(:m, baseline=>shock, [p[:hh, :], q]))
 	@test count(==("year"), split(mixed_dims_print)) == 1
 	@test all(label -> occursin(label, mixed_dims_print), ["p[:hh, :]", "q[hh]", "q[firm]"])
 	fq = 2
-	@test @prt(baseline, p[:hh, 2021] * q[:hh, 2021] / fq) == 2.0
-	@test @prt(baseline, (p[:hh, 2021] * q[:hh, 2021], p[:firm, 2021] * q[:firm, 2020] / fq)) == (4, 30.0)
-	multi = @prt(baseline, (p[:hh, :], p[:firm, :]))
+	@test @evalexpr(baseline, p[:hh, 2021] * q[:hh, 2021] / fq) == 2.0
+	@test @evalexpr(baseline, (p[:hh, 2021] * q[:hh, 2021], p[:firm, 2021] * q[:firm, 2020] / fq)) == (4, 30.0)
+	multi = @evalexpr(baseline, (p[:hh, :], p[:firm, :]))
 	@test multi == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(baseline, p[:firm, :])))
 	@test occursin("p[:hh, :]", sprint(show, MIME"text/plain"(), multi))
 	@test occursin("p[:firm, :]", sprint(show, MIME"text/plain"(), multi))
-	@test Array(@prt(baseline, p)) == [1.0 2.0; 10.0 20.0]
-	@test occursin("2020", sprint(show, MIME"text/plain"(), @prt(baseline, p)))
-	@test isequal(@prt(:p, baseline, p[:hh, :]), [NaN, 100.0])
-	@test @prt(:m, baseline=>shock, p[:hh, :]) == [1.0, 2.0]
-	@test @prt(:q, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
+	@test Array(@evalexpr(baseline, p)) == [1.0 2.0; 10.0 20.0]
+	@test occursin("2020", sprint(show, MIME"text/plain"(), @evalexpr(baseline, p)))
+	@test isequal(@evalexpr(:p, baseline, p[:hh, :]), [NaN, 100.0])
+	@test @evalexpr(:m, baseline=>shock, p[:hh, :]) == [1.0, 2.0]
+	@test @evalexpr(:q, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
 	@test isequal(map(Array, @evalexpr([:n, :p], baseline, p[:hh, :])), [[1, 2], [NaN, 100.0]])
-	an = @prt(:an, baseline=>shock, p)
+	an = @evalexpr(:an, baseline=>shock, p)
 	@test all(v -> v isa LabeledArray, an)
 	@test occursin("year", sprint(show, MIME"text/plain"(), an[2]))
 	@test (@evalexpr :q baseline=>shock p[:hh, :]) == [100.0, 100.0]
 	op = :q
-	@test @prt(op, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
-	pair_print = @prt(baseline=>shock, p[:hh, :])
+	@test @evalexpr(op, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
+	pair_print = @evalexpr(baseline=>shock, p[:hh, :])
 	@test pair_print == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(shock, p[:hh, :])))
 	printed_pair = sprint(show, MIME"text/plain"(), pair_print)
 	@test !occursin("baseline:p[:hh, :]", printed_pair)
@@ -408,7 +496,7 @@ end
 	@test occursin("p[:hh, :]", printed_pair)
 	# Narrow width forces the 34-char label to wrap across two rows of 24 chars.
 	set_column_label_total_width!(48)
-	long_print = sprint(show, MIME"text/plain"(), @prt((baseline=>shock, baseline), p[:hh, :] * q[:hh, :] + p[:hh, :]))
+	long_print = sprint(show, MIME"text/plain"(), @evalexpr((baseline=>shock, baseline), p[:hh, :] * q[:hh, :] + p[:hh, :]))
 	set_column_label_total_width!(72)
 	@test !occursin("p[:hh, :] * q[:hh, :] + p[:hh, :]", long_print)
 	@test occursin("p[:hh, :] *", long_print)
@@ -418,19 +506,19 @@ end
 	set_column_label_total_width!(100)
 	@test SquareModels._column_label_width(1) == 100
 	set_column_label_total_width!(72)
-	multi_db = @prt((baseline=>shock, baseline), p[:hh, :])
+	multi_db = @evalexpr((baseline=>shock, baseline), p[:hh, :])
 	@test multi_db.names == ["baseline\np[:hh, :]", "shock\np[:hh, :]"]
 	@test multi_db == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(shock, p[:hh, :])))
-	multi_q = @prt(:q, (baseline=>baseline, baseline=>shock), p[:hh, :])
+	multi_q = @evalexpr(:q, (baseline=>baseline, baseline=>shock), p[:hh, :])
 	@test multi_q.names == ["baseline\np[:hh, :]", "shock\np[:hh, :]"]
 	@test multi_q == ([0.0, 0.0], [100.0, 100.0])
-	printed_p = sprint(show, MIME"text/plain"(), @prt(baseline, p))
+	printed_p = sprint(show, MIME"text/plain"(), @evalexpr(baseline, p))
 	@test occursin("year", printed_p)
 	@test occursin("hh", printed_p)
 	@test occursin("firm", printed_p)
-	printed_slice = sprint(show, MIME"text/plain"(), @prt(baseline, p[:hh, :]))
+	printed_slice = sprint(show, MIME"text/plain"(), @evalexpr(baseline, p[:hh, :]))
 	@test occursin("p[:hh, :]", printed_slice)
-	long_print = sprint(show, MIME"text/plain"(), @prt(:m, baseline => shock, p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :]))
+	long_print = sprint(show, MIME"text/plain"(), @evalexpr(:m, baseline => shock, p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :]))
 	@test !occursin("p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :]", long_print)
 	@test occursin("p[:hh, :]", long_print)
 	@test !occursin("(", long_print)
@@ -490,21 +578,21 @@ end
 	@test series[1].y == [100.0, 100.0]
 
 	set_default_source!(baseline)
-	@test Array(@prt(p[:hh, :])) == [1, 2]
-	@test isequal(@prt(:p, p[:hh, :]), [NaN, 100.0])
-	@test isequal((@prt :p p[:hh, :]), [NaN, 100.0])
+	@test Array(@evalexpr(p[:hh, :])) == [1, 2]
+	@test isequal(@evalexpr(:p, p[:hh, :]), [NaN, 100.0])
+	@test isequal((@evalexpr :p p[:hh, :]), [NaN, 100.0])
 
 	set_default_source!(baseline => shock)
-	@test @prt(:q, p[:hh, :]) == [100.0, 100.0]
+	@test @evalexpr(:q, p[:hh, :]) == [100.0, 100.0]
 
 	set_default_operator!(:q)
-	@test @prt(p[:hh, :]) == [100.0, 100.0]
+	@test @evalexpr(p[:hh, :]) == [100.0, 100.0]
 
 	set_default_source!(baseline)
-	@test @prt(:q, p[:hh, :]) == [0.0, 0.0]
+	@test @evalexpr(:q, p[:hh, :]) == [0.0, 0.0]
 
 	set_default_source!(baseline, baseline => shock)
-	default_multi = @prt(:q, p[:hh, :])
+	default_multi = @evalexpr(:q, p[:hh, :])
 	@test default_multi.names == ["baseline1\np[:hh, :]", "s2\np[:hh, :]"]
 	@test default_multi == ([0.0, 0.0], [100.0, 100.0])
 	series = @plot(:q, p[:hh, :])
@@ -524,7 +612,7 @@ end
 	set_default_operator!(:n)
 	set_default_periods!(2021:2021)
 	set_default_source!(baseline => shock)
-	@test @prt(:m, p[:hh, :]) == [2.0]
+	@test @evalexpr(:m, p[:hh, :]) == [2.0]
 	series = @plot :m p[:hh, :]
 	@test length(series) == 1
 	@test series[1].x == [2021]
@@ -532,15 +620,15 @@ end
 	series = @plot :q p[:hh, :]
 	@test series[1].y == [100.0]
 	set_default_source!(baseline)
-	@test Array(@prt(p[:hh, :])) == [2]
-	@test Array(@prt(p[:hh])) == [2]
-	@test @prt(p[:hh, 2020]) == 1
-	@test @prt(2020, p[:hh]) == 1
-	@test Array(@prt 2020:2020 p[:hh, :]) == [1]
-	@test Array(@prt 2020:2020 p[:hh]) == [1]
-	@test Array(@prt 2021:2021 baseline p[:hh, :]) == [2]
-	@test Array(@prt(sum(L[l, :] for l in l))) == [22]
-	@test Array(@prt(sum(L[l] for l in l))) == [22]
+	@test Array(@evalexpr(p[:hh, :])) == [2]
+	@test Array(@evalexpr(p[:hh])) == [2]
+	@test @evalexpr(p[:hh, 2020]) == 1
+	@test @evalexpr(2020, p[:hh]) == 1
+	@test Array(@evalexpr 2020:2020 p[:hh, :]) == [1]
+	@test Array(@evalexpr 2020:2020 p[:hh]) == [1]
+	@test Array(@evalexpr 2021:2021 baseline p[:hh, :]) == [2]
+	@test Array(@evalexpr(sum(L[l, :] for l in l))) == [22]
+	@test Array(@evalexpr(sum(L[l] for l in l))) == [22]
 	series = @plot p
 	@test length(series) == 2
 	@test series[1].x == [2021]
@@ -576,7 +664,7 @@ end
 	@test isequal(Array(@evalexpr(db, a[:hh, :] * b[:hh, :])), [nothing, 2.0, 2.0])
 	@test isequal(Array(@evalexpr(db, b[:hh, :] / a[:hh, :])), [nothing, 2.0, 2.0])
 	@test @evalexpr(db, sum(a[:hh, t] for t in 2020:2022)) === nothing
-	@test occursin("nothing", sprint(show, MIME"text/plain"(), @prt(db, a[:hh, :] * b[:hh, :])))
+	@test occursin("nothing", sprint(show, MIME"text/plain"(), @evalexpr(db, a[:hh, :] * b[:hh, :])))
 	@test isequal(@evalexpr(:p, db, a[:hh, :]), [NaN, NaN, 0.0])
 end
 

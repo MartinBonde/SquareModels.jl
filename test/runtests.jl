@@ -3,7 +3,13 @@ using Test
 @testset "SquareModels Tests" begin
 	include("test_Blocks.jl")
 	include("test_utils.jl")
+	include("test_ModelLayouts.jl")
 	include("test_ModelDictionaries.jl")
+	include("test_ModelDictionaryStorage.jl")
+	include("test_WindowAssignment.jl")
+	include("test_ModelDictionaryBroadcast.jl")
+	include("test_LoadPreparation.jl")
+	include("test_ModelExpressions.jl")
 	include("test_build_model.jl")
 	include("test_integration.jl")
 	include("test_tagged_variables.jl")
