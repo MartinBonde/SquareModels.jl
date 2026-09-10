@@ -352,11 +352,11 @@ end
 		d = ModelDictionary(model)
 		source = sparse_axis([(:a, 1) => 1.0])
 		@test_throws(
-			ErrorException("Cannot assign sparse data with 2 index axes to a window with 1 index axes"),
+			DimensionMismatch("Cannot assign sparse data with 2 index axes to a window with 1 index axes"),
 			d[x] .= source,
 		)
 		@test_throws(
-			ErrorException("Cannot assign sparse data with 2 index axes to a window with 1 index axes"),
+			DimensionMismatch("Cannot assign sparse data with 2 index axes to a window with 1 index axes"),
 			d[x] .= KeyedData([(:a, 1) => 1.0]),
 		)
 	end
@@ -388,7 +388,7 @@ end
 end
 
 @testset "Test getting and setting single variables refs" begin
-	b = ModelDictionary(model)
+	b = ModelDictionary{Number}(model) # Preserve exact rational and mixed numeric values.
 
 	b[x] = 1
 	@test b[x] == 1
@@ -407,7 +407,7 @@ end
 end
 
 @testset "Test getting and setting variable containers to scalars" begin
-	b = ModelDictionary(model)
+	b = ModelDictionary{Number}(model)
 
 	b[y] = 2.0
 	@test b[y[1]] == 2.0
@@ -423,7 +423,7 @@ end
 end
 
 @testset "Test setting single variable refs, but getting container" begin
-	b = ModelDictionary(model)
+	b = ModelDictionary{Number}(model)
 	b[y[1]] = 1
 	@test !isnothing(b[y[1]])
 	@test isnothing(b[y[2]])
@@ -562,6 +562,55 @@ end
 	@test all(start_value.(z) .== 1.0)
 end
 
+@testset "Dataset fix and start values synchronize by variable identity" begin
+	for T in (Float64, Float32, BigFloat), (apply!, read_value) in
+			((fix, fix_value), (set_start_value, start_value))
+		@testset "$T / $apply!" begin
+			model = GenericModel{T}()
+			@variable(model, x)
+			d = ModelDictionary{T}(model, T(2))
+			@variable(model, added)
+			# No indexing between growth and applying the full dataset.
+			@test length(d) == 1
+			@test_throws ErrorException apply!(d)
+			@test length(d) == 2
+			d[added] = T(3)
+			apply!(d)
+			@test read_value(x) == T(2)
+			@test read_value(added) == T(3)
+
+			# Scalar and array overloads also accept generic JuMP references.
+			d[x] = T(4)
+			apply!(x, d)
+			@test read_value(x) == T(4)
+			d[added] = T(5)
+			apply!([added], d)
+			@test read_value(added) == T(5)
+
+			model = GenericModel{T}()
+			@variable(model, excluded)
+			anonymous = @variable(model)
+			d = ModelDictionary{T}(model, T[1, 7])
+			subset = d[d .> T(1)]
+			selected_all = d[d .> T(0)]
+			@variable(model, later)
+			apply!(subset)
+			@test read_value(anonymous) == T(7)
+			@test !is_fixed(excluded) && isnothing(start_value(excluded))
+			@test !is_fixed(later) && isnothing(start_value(later))
+			@test length(subset) == 1
+			subset[anonymous] = nothing
+			@test_throws ErrorException apply!(subset)
+
+			# A filter selecting all current variables is still a subset on growth.
+			@variable(model, newest)
+			apply!(selected_all)
+			@test read_value(excluded) == T(1)
+			@test !is_fixed(newest) && isnothing(start_value(newest))
+		end
+	end
+end
+
 @testset "Test ∈" begin
 	b = ModelDictionary(model)
 	@test "x" ∈ b
@@ -576,7 +625,7 @@ end
 end
 
 @testset "Test dot access syntax" begin
-	b = ModelDictionary(model)
+	b = ModelDictionary{Number}(model)
 
 	b.x = 1
 	@test b.x == b[x] == 1
@@ -644,7 +693,7 @@ end
 	# Explicitly sync the dictionary
 	add_missing_model_variables!(d)
 
-	# Now they should be present (with nothing values)
+	# Synchronization adds the variables with nothing values.
 	@test "c" ∈ keys(d.dictionary)
 	@test "d_var[1]" ∈ keys(d.dictionary)
 	@test "d_var[2]" ∈ keys(d.dictionary)
@@ -654,9 +703,7 @@ end
 end
 
 @testset "Test add_missing after subset creation" begin
-	# A subset dictionary created via broadcast filtering may have
-	# length(dict) >= num_variables(model) even when model variables are missing.
-	# Regression test: the sync guard must not use a count heuristic.
+	# Explicit expansion must include both unselected and newly added variables.
 	model3 = Model()
 	@variable(model3, p[1:5])
 
@@ -667,16 +714,14 @@ end
 	subset = full[full .> 20]
 	@test length(subset) == 3
 
-	# Now add 2 new variables → model has 7, subset has 3
-	# The old heuristic (num_vars <= length(dict)) would skip sync once
-	# subset grew past num_vars. With tracked counter, sync is always correct.
+	# Add two variables: the model has seven and the subset has three.
 	@variable(model3, q[1:2])
 	add_missing_model_variables!(subset)
 	@test "q[1]" ∈ keys(subset.dictionary)
 	@test "q[2]" ∈ keys(subset.dictionary)
 	@test length(subset) == 7  # 3 original + 4 previously missing (p[1:2], q[1:2])
 
-	# Verify repeated sync is a no-op (counter is up-to-date)
+	# Verify repeated sync is a no-op.
 	len_before = length(subset)
 	add_missing_model_variables!(subset)
 	@test length(subset) == len_before
@@ -688,11 +733,9 @@ end
 
 	full = ModelDictionary(model, [1.0, 2.0, 3.0])
 	sparse = full[full .> 1.0]
-	sparse._synced_n_vars[] = num_variables(model)
 
 	copied = copy(sparse)
 	@test length(copied) == length(sparse) == 2
-	@test copied._synced_n_vars[] == sparse._synced_n_vars[]
 
 	copied[x[2:3]]
 	@test length(copied) == 2

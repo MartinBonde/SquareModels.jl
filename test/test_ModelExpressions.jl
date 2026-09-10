@@ -55,7 +55,7 @@ end
 		@test occursin("nothing", printed)
 		scalar, result = capture_stdout(() -> @prt x[2020])
 		@test result === nothing
-		@test scalar == "10\n"
+		@test scalar == "10.0\n"
 		unset, result = capture_stdout(() -> @prt y[2020])
 		@test result === nothing
 		@test unset == "nothing\n"

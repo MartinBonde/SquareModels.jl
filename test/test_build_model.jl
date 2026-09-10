@@ -259,7 +259,7 @@ end
         μ, Y[1]
     end
 
-    # Now μ is endogenous, Y[1] is exogenous
+    # The swap makes μ endogenous and Y[1] exogenous.
     # Y[1] = μ * 1, so μ = Y[1] = 10
     solution = solve(cal_block, data)
 
@@ -325,7 +325,7 @@ end
     @endo_exo_swap! cal_block begin
         z, y
     end
-    # Now: eq1 is "x + x_J == 5" (x endo) — fine
+    # Equation eq1 is "x + x_J == 5", with x endogenous.
     #      eq2 is "y_data + y_J == z * 2" (z endo) — fine
     trivial, orphans = diagnose(cal_block, data)
     @test isempty(trivial)
@@ -359,7 +359,7 @@ end
     @endo_exo_swap! cal_block begin
         residuals(cal_block)[1], x
     end
-    # Now eq1: "x_data + x_J == a * y" → x_J is endogenous, a and y are exogenous
+    # Equation eq1 is "x_data + x_J == a * y"; x_J is endogenous, a and y are exogenous.
     # After sub: x_J_solve == 0*10 - 5 = -5. x_J is still a variable, not trivial.
 
     # For a truly trivial equation: all vars in the equation become exogenous after swap.

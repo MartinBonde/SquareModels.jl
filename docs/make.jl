@@ -15,6 +15,7 @@ makedocs(;
         "Home" => "index.md",
         "Getting Started" => "quickstart.md",
         "Core Concepts" => "concepts.md",
+        "Dataset Performance" => "performance.md",
         "Solving" => "solving.md",
         "Plotting and Printing" => "plotting.md",
         "Modular Models" => "modular.md",

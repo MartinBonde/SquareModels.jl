@@ -11,6 +11,7 @@ export @block, @test_constraint, Block, TestConstraint, Equation, @endo_exo_swap
 export endogenous, residuals, residual, variables, exogenous, is_endogenous, overlaps, shared_endogenous
 export VariableRef  # Re-exported from JuMP for macro hygiene
 export ModelDictionary, fix, unfix, set_start_value, value, value_dict, add_missing_model_variables!
+export refresh_model_layout!
 export keys_match, assert_no_diff, assert_residuals_small, assert_test_constraints, test_constraints, test_constraint_variables
 export SquareModelError, ResidualError, ToleranceError, TestConstraintError, NonSquareError
 export unload, load, read_indices, read_sparse_array, read_variable
@@ -43,7 +44,8 @@ using JuMP: @variable
 using JuMP: set_name, name, fix, is_fixed, unfix, all_variables, value, set_start_value
 using JuMP: object_dictionary, set_string_names_on_creation
 import MathOptInterface as MOI
-const _name_lookup_cache = WeakKeyDict{AbstractModel, Dict{String, VariableRef}}()
+
+include("ModelLayouts.jl")
 
 include("errors.jl")
 include("utils.jl")
@@ -601,19 +603,19 @@ end
 
 make_residual_name(var) = string(var) * SquareModels.RESIDUAL_SUFFIX
 
-"""Cached version of JuMP.variable_by_name — O(1) after first call per model."""
+"""
+    variable_by_name(model, var_name)
+
+Find a variable using the model's shared index, returning `nothing` when absent.
+For standard cached JuMP models, both successful and unsuccessful lookups take
+constant expected time after the index is built. See [`refresh_model_layout!`](@ref)
+for external model changes and other backends.
+"""
 function variable_by_name(model::AbstractModel, var_name::AbstractString)
-	lookup = get!(_name_lookup_cache, model) do
-		Dict{String, VariableRef}(name(v) => v for v in all_variables(model))
-	end
-	key = String(var_name)
-	v = get(lookup, key, nothing)
-	v !== nothing && return v
-	for v in all_variables(model)
-		n = name(v)
-		haskey(lookup, n) || (lookup[n] = v)
-	end
-	return get(lookup, key, nothing)
+	layout = _model_layout(model)
+	slot = get(layout.name_to_slot, String(var_name), -1)
+	slot == 0 && error("Multiple variables have the name $var_name.")
+	return slot == -1 ? nothing : layout.variables[slot]
 end
 
 """
@@ -1387,44 +1389,29 @@ function _parse_block_expression(expression)
 			arguments = Any[item.args[3:end]...]
 			parameters = !isempty(arguments) && isexpr(first(arguments), :parameters) ?
 				popfirst!(arguments) : Expr(:parameters)
-			if length(arguments) in (1, 2) && isexpr(last(arguments), :tuple)
-				isempty(parameters.args) || _block_error(
+			length(arguments) <= 1 && all(arg -> !isexpr(arg, :tuple), arguments) || _block_error(
+				line_number,
+				item,
+				"Put `@test_constraint([message]; atol, rtol)` on its own line before `variable, equation`",
+			)
+			message = isempty(arguments) ? "" : only(arguments)
+			options = Dict{Symbol,Any}(:atol => nothing, :rtol => nothing)
+			seen_options = Set{Symbol}()
+			for option in parameters.args
+				isexpr(option, :kw) && option.args[1] in keys(options) || _block_error(
+					line_number, item, "Test constraint keywords must be `atol` or `rtol`",
+				)
+				option.args[1] in seen_options && _block_error(
 					line_number,
 					item,
-					"Put `@test_constraint(message; atol, rtol)` on its own line to use keywords",
+					"Test constraint keyword `$(option.args[1])` occurs more than once",
 				)
-				message = length(arguments) == 2 ? first(arguments) : ""
-				tuple = last(arguments)
-				_is_block_test_relation(tuple.args[2]) || _block_error(
-					line_number, item, "The test constraint must use `==`, `<=`, or `>=`",
-				)
-				push!(test_constraint_items, (line_number, tuple, message, nothing, nothing))
-				last_tuple = tuple
-			else
-				length(arguments) in (0, 1) || _block_error(
-					line_number,
-					item,
-					"Put `@test_constraint([message]; atol, rtol)` on its own line before `variable, equation`",
-				)
-				message = isempty(arguments) ? "" : only(arguments)
-				options = Dict{Symbol,Any}(:atol => nothing, :rtol => nothing)
-				seen_options = Set{Symbol}()
-				for option in parameters.args
-					isexpr(option, :kw) && option.args[1] in keys(options) || _block_error(
-						line_number, item, "Test constraint keywords must be `atol` or `rtol`",
-					)
-					option.args[1] in seen_options && _block_error(
-						line_number,
-						item,
-						"Test constraint keyword `$(option.args[1])` occurs more than once",
-					)
-					push!(seen_options, option.args[1])
-					options[option.args[1]] = option.args[2]
-				end
-				pending_test_constraint =
-					(line_number, item, message, options[:atol], options[:rtol])
-				last_tuple = nothing
+				push!(seen_options, option.args[1])
+				options[option.args[1]] = option.args[2]
 			end
+			pending_test_constraint =
+				(line_number, item, message, options[:atol], options[:rtol])
+			last_tuple = nothing
 		elseif last_tuple !== nothing
 			equation = last_tuple.args[2]
 			continuation = _prepend_block_continuation(item, equation.args[3])
@@ -1749,6 +1736,7 @@ end
 include("endo_exo_swap.jl")
 include("tagged_variables.jl")
 include("ModelDictionaries.jl")
+export ModelSelection, prepare_selection
 
 description(dictionary::ModelDictionary, var::Symbol) = description(dictionary.model, var)
 tags(dictionary::ModelDictionary, var::Symbol) = tags(dictionary.model, var)
