@@ -120,7 +120,9 @@ normalised_gdp = @evalexpr data qGDP / qGDP[2020]
 round.(normalised_gdp, digits=3)
 ```
 
-[`@prt`](@ref) prints values and transformations in a table-oriented format. An
+[`@prt`](@ref) prints values and transformations to `stdout` and returns `nothing`.
+It prints from the REPL, scripts, and functions. Use `@evalexpr` when you need the
+result for further work or export. An
 optional operator symbol selects the transformation, e.g. `:p` for percent
 growth and `:q` for percent deviation from a reference:
 
@@ -131,9 +133,39 @@ growth and `:q` for percent deviation from a reference:
 @prt 2020:2060 qGDP                         # default source, selected periods
 ```
 
-In a limited display context such as the REPL, long `@prt` and `Window` tables
-fit the available height. To print all rows, assign the result and show it with
-`:limit => false` in the `IOContext`.
+`@prt` prints all rows and columns unless `stdout` has `:limit => true` in its
+`IOContext`. When the REPL displays a returned `@evalexpr` or `Window` result,
+tables fit the display. `:limit => false` disables both row and column cropping.
+
+Results from `@evalexpr` support the Tables.jl interface. Array tables put the
+final axis in a `year` column and expand each leading-index combination into a
+value column. Multiple arrays align on the union of their periods. Unassigned
+values and sparse gaps become `missing`; the model values stay unchanged.
+
+```julia
+using CSV, DataFrames
+
+report = @evalexpr :n data (qGDP, qC)
+@prt :n data $report
+CSV.write("summary.csv", report)
+frame = DataFrame(report)
+```
+
+Scalar groups export as one row without a `year` column. Mixed scalar/array
+groups and nested groups have no single table and cannot be exported. Exported
+column names must be unique, including `year`. An unnamed value column uses
+`value`. CSV keeps numeric precision by default; use its `transform` option
+when a file needs a fixed number of decimals.
+
+Use symbolic aliases or `MultiVarResult` for custom column labels:
+
+```julia
+# With pW and pC imported from the model, this alias still uses the active source.
+RealWage = pW ./ pC
+report = @evalexpr :n data (qGDP, RealWage)
+report = MultiVarResult(["GDP", "Real wage"], report.values)
+@prt :n data $report
+```
 
 ### Print operators
 
@@ -264,6 +296,15 @@ appear when the legend is disabled. Each series supplies its numeric `x` and `y`
 values, so annotations do not need to read plotted coordinates.
 
 ## Trellis plots
+
+Percentage operators use Makie's tick precision and add a percent sign. This
+keeps small values distinct. For panels that contain only percentage deviations
+(`:q`), linear y axes use symmetric limits with 15% space beyond the largest
+absolute response and a minimum range of ±0.05%. Values stay unchanged, including
+small responses and missing observations. Each trellis panel gets these defaults.
+Explicit `axis=(ytickformat=..., limits=...)` settings or a `decorate` function
+can override them. Mixed level/percentage panels keep their usual axis defaults.
+`plotseries!` preserves the settings of an existing axis.
 
 Set source, periods, and operator once for a report. All three expression macros
 use these settings when you omit their corresponding arguments:

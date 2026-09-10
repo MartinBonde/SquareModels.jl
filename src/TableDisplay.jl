@@ -38,7 +38,7 @@ function _sparse_table_layout(keys, values)
 	combos = unique(Base.front(key) for key in keys)
 	period_index = Dict(period => i for (i, period) in enumerate(periods))
 	combo_index = Dict(combo => i for (i, combo) in enumerate(combos))
-	matrix = fill!(Matrix{Any}(undef, length(periods), length(combos)), "")
+	matrix = fill!(Matrix{Any}(undef, length(periods), length(combos)), missing)
 	for (key, value) in zip(keys, values)
 		matrix[period_index[key[end]], combo_index[Base.front(key)]] = value
 	end
@@ -84,9 +84,12 @@ function _print_table(
 	io::IO,
 	data;
 	fit_table_in_display_vertically=get(io, :limit, false),
+	fit_table_in_display_horizontally=get(io, :limit, false),
+	formatters=[(value, row, col) -> ismissing(value) ? "" : value],
 	kwargs...,
 )
-	return pretty_table(io, data; fit_table_in_display_vertically, kwargs...)
+	return pretty_table(io, data;
+		fit_table_in_display_vertically, fit_table_in_display_horizontally, formatters, kwargs...)
 end
 
 function _print_period_table(io::IO, data, periods, labels)

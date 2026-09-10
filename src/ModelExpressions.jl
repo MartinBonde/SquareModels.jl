@@ -1,9 +1,11 @@
-# ModelExpressions - Evaluate ModelDictionary expressions without plotting
+# Evaluate ModelDictionary expressions and print their results.
+# Export labeled results as tables without changing model values.
 
 module ModelExpressions
 
 using Base.Meta: isexpr
 using JuMP: JuMP
+import Tables
 import ..Window, ..SparseZeroArray, ..SparseAxisArray
 import .._SparseTableArray, .._table_layout, .._period_row_table
 import .._column_label, .._column_labels
@@ -20,8 +22,10 @@ A thin `AbstractArray` wrapper that keeps the indexing and iteration rules of
 `data`, plus an optional expression `name` for display. Dense results keep the
 per-dimension labels in `dims` (e.g. `([:hh, :firm], 2020:2021)`). Sparse
 results keep their sparse container and use its stored keys. `@prt` and
-`@evalexpr` use this type so all array results print as tables. A sparse result
-does not gain a rectangular shape: `size`, `axes`, and `Array` have the same
+`@evalexpr` use this type so all array results print as tables. The Tables.jl
+interface exports the final axis as `year` and each leading-index combination
+as a value column. Unassigned values and sparse gaps become `missing`.
+A sparse result does not gain a rectangular shape: `size`, `axes`, and `Array` have the same
 limits as its sparse source. For sparse data, the constructor ignores `dims`
 because the container has no declared axis order. `map` returns the source
 array type without labels.
@@ -91,12 +95,18 @@ _relabel(result, x, name="") = result
 """
     MultiVarResult(names, values)
 
-Result of printing several expressions together, e.g. `@prt data (qGDP, pGDP)`.
+Result of evaluating several expressions together, e.g. `@evalexpr data (qGDP, pGDP)`.
 Behaves like the underlying `values` tuple for equality, iteration, and
 indexing, but displays as a single PrettyTables.jl table with one column per
 name when every value is a scalar. Array results use the union of their
 final-dimension labels and leave absent display cells blank. Other values print
 under separate headings.
+
+The Tables.jl interface exports scalar groups as one row and array groups with
+the same period alignment as the display. Array tables include a `year` column.
+Unassigned values and absent cells become `missing`. Column names must be unique,
+including `year`; use `names` for custom labels. Mixed scalar/array groups and
+nested groups have no single table and cannot be exported.
 """
 struct MultiVarResult{T<:Tuple}
 	names::Vector{String}
@@ -125,24 +135,37 @@ _combined_periods(layouts) = _order_periods(unique(period for layout in layouts 
 function _align_periods(layout, periods)
 	rows = [findfirst(value -> isequal(value, period), layout.periods) for period in periods]
 	all(!isnothing, rows) && return layout.data[[row::Int for row in rows], :]
-	aligned = fill!(Matrix{Any}(undef, length(periods), size(layout.data, 2)), "")
+	aligned = fill!(Matrix{Any}(undef, length(periods), size(layout.data, 2)), missing)
 	for (target, source) in enumerate(rows)
 		source === nothing || (aligned[target, :] = layout.data[source, :])
 	end
 	return aligned
 end
 
+function _combined_table(layouts, names)
+	periods = _combined_periods(layouts)
+	# Keep each cell's numeric type: hcat promotion can round large integers
+	# when another expression contributes floating-point columns.
+	data = Matrix{Any}(undef, length(periods), sum(layout -> size(layout.data, 2), layouts))
+	column = 1
+	for layout in layouts
+		n = size(layout.data, 2)
+		data[:, column:(column + n - 1)] = _align_periods(layout, periods)
+		column += n
+	end
+	labels = [_column_label(name, combo) for (name, layout) in zip(names, layouts) for combo in layout.combos]
+	return (; data, periods, labels)
+end
+
 function Base.show(io::IO, ::MIME"text/plain", r::MultiVarResult)
-	if all(v -> v isa Number, r.values)
+	if all(v -> v isa Union{Number,Nothing,Missing}, r.values)
 		mat = reduce(hcat, [v] for v in r.values)
 		_print_table(io, mat; column_labels=_column_labels(r.names))
 	else
 		layouts = _layout_of.(r.values)
 		if all(layout -> layout !== nothing && !isempty(layout.combos), layouts)
-			periods = _combined_periods(layouts)
-			aligned = [_align_periods(layout, periods) for layout in layouts]
-			labels = [_column_label(name, combo) for (name, layout) in zip(r.names, layouts) for combo in layout.combos]
-			return _print_period_table(io, reduce(hcat, aligned), periods, labels)
+			table = _combined_table(layouts, r.names)
+			return _print_period_table(io, table.data, table.periods, table.labels)
 		end
 		for (i, (name, v)) in enumerate(zip(r.names, r.values))
 			i > 1 && println(io)
@@ -152,6 +175,42 @@ function Base.show(io::IO, ::MIME"text/plain", r::MultiVarResult)
 	end
 end
 Base.show(io::IO, r::MultiVarResult) = show(io, MIME"text/plain"(), r)
+
+# Share the display layout with CSV, DataFrames, and other Tables.jl consumers.
+Tables.istable(::Type{<:LabeledArray}) = true
+Tables.istable(::Type{<:MultiVarResult}) = true
+Tables.columnaccess(::Type{<:LabeledArray}) = true
+Tables.columnaccess(::Type{<:MultiVarResult}) = true
+
+_export_cell(value) = value
+_export_cell(::Nothing) = missing
+
+function _named_columns(labels, columns)
+	names = Tuple(Symbol(isempty(label) ? "value" : label) for label in labels)
+	allunique(names) || throw(ArgumentError("table column names must be unique, including year; use custom labels"))
+	return NamedTuple{names}(Tuple(columns))
+end
+
+function _period_columns(data, periods, labels)
+	columns = ([_export_cell(value) for value in column] for column in eachcol(data))
+	return _named_columns(["year"; labels], (collect(periods), columns...))
+end
+
+function Tables.columns(a::LabeledArray)
+	layout = _labeled_layout(a)
+	labels = [_column_label(a.name, combo) for combo in layout.combos]
+	return _period_columns(layout.data, layout.periods, labels)
+end
+
+function Tables.columns(r::MultiVarResult)
+	if all(v -> v isa Union{Number,Nothing,Missing}, r.values)
+		return _named_columns(r.names, ([_export_cell(value)] for value in r.values))
+	end
+	layouts = _layout_of.(r.values)
+	all(!isnothing, layouts) || throw(ArgumentError("table export requires a group of scalars or labeled arrays"))
+	table = _combined_table(layouts, r.names)
+	return _period_columns(table.data, table.periods, table.labels)
+end
 
 """
     _GroupEntry(source_label, source, reference_label, reference)
@@ -496,14 +555,18 @@ function _lookup(db, name::Symbol, fallback, periods=nothing)
 	return _expression_array(_with_periods(_model_binding(db, name), periods))
 end
 _value(db, x) = _restore_nothing(JuMP.value(v -> _nothing_to_na(db[v]), x))
+_value(db, ::Nothing) = nothing
+_value(db, ::Missing) = missing
 _value(db, x::SparseZeroArray{<:Number}) = x
 _value(db, x::SparseZeroArray) = SparseZeroArray(_value(db, x.data), map(copy, x.domain))
 _value(db, x::SparseAxisArray{<:Number}) = x
 _value(db, x::SparseAxisArray) = _map_stored((key, value) -> _value(db, value), x)
+_value(db, x::AbstractArray) = _value.(Ref(db), x)
 _value(db, x::AbstractArray{<:Number}) = x
 _value(db, x::LabeledArray) = LabeledArray(_value(db, x.data), x.dims, x.name)
 _value(db, x::LabeledArray{<:Number}) = x
 _value(db, x::Tuple) = map(y -> _value(db, y), x)
+_value(db, x::MultiVarResult) = MultiVarResult(x.names, map(value -> _value(db, value), x.values))
 
 _with_periods(x, periods) = periods === nothing ? x : _slice_periods(x, periods)
 _fallback_periods(x, periods) = x
@@ -886,11 +949,19 @@ end
     @prt op reference=>source expr
     @prt op (source1, reference=>source2, ...) expr
 
-Evaluate a model expression for display in the REPL. This is an alias for
-[`@evalexpr`](@ref), so the returned value is what gets printed by the caller.
+Evaluate a model expression, print it to `stdout`, and return `nothing`.
+This also prints from scripts and functions. Use [`@evalexpr`](@ref) to retain
+the result for further work or table export. To print a result that you already
+evaluated, use `@prt \$result` with a default source and the level operator `:n`.
 """
 macro prt(args...)
-	return _eval_macro(args)
+	return :($(GlobalRef(@__MODULE__, :_print_result))($(_eval_macro(args))))
+end
+
+function _print_result(result)
+	show(stdout, MIME"text/plain"(), result)
+	println(stdout)
+	return nothing
 end
 
 end

@@ -49,6 +49,28 @@ function ModelPlotting.alternating_dash!(ax, series)
 	return ax
 end
 
+_percent_ticks(values) = [Makie.rich(label, "%") for label in Makie.get_ticklabels(Makie.automatic, values)]
+
+function _response_limit(series)
+	isempty(series) && return nothing
+	all(s -> _op(s) == :q, series) || return nothing
+	values = [y for s in series for y in s.y if isfinite(y)]
+	isempty(values) && return nothing
+	return max(0.05, 1.15 * maximum(abs, values))
+end
+
+# Apply operator defaults only to new axes. Explicit limits and formats take precedence.
+function _operator_axis!(ax, series; response_limit=_response_limit(series))
+	if !isempty(series) && all(s -> _op(s) in (:p, :pch, :dp, :gdif, :q, :mp, :rp, :rdp), series)
+		ax.ytickformat[] === Makie.automatic && (ax.ytickformat = _percent_ticks)
+	end
+	response_limit !== nothing && ax.yscale[] === identity || return
+	ylimits = Makie.convert_limit_attribute(ax.limits[])[2]
+	(ylimits === nothing || all(isnothing, ylimits)) || return
+	# This is a display range, not a change to small or zero observations.
+	ylims!(ax, -response_limit, response_limit)
+end
+
 function _alternating_dash!(plots, series)
 	labels = _base_label.(series)
 	groups = unique(labels)
@@ -181,10 +203,18 @@ function ModelPlotting.plotseries(
 	expanded = _expand(series)
 	layout == :trellis && return _trellis(position, expanded;
 		title, xlabel, ylabel, axis, legend, decorate, columns, panel_titles, linkx, linky, labels, styles, kwargs...)
-	ax = Axis(position; title, xlabel, ylabel=something(ylabel, _default_ylabel(expanded)), axis...)
+	return _plot_panel(position, expanded; title, xlabel, ylabel, axis, legend, decorate, labels, styles, kwargs...)
+end
+
+function _plot_panel(position, series; title="", xlabel="", ylabel=nothing,
+	axis=(;), legend=nothing, decorate=nothing, labels=nothing, styles=nothing,
+	response_limit=_response_limit(series), kwargs...,
+)
+	ax = Axis(position; title, xlabel, ylabel=something(ylabel, _default_ylabel(series)), axis...)
 	fig = ax.parent
-	ModelPlotting.plotseries!(ax, expanded; labels, styles, kwargs...)
-	return _finish(fig, ax, expanded, legend, decorate)
+	ModelPlotting.plotseries!(ax, series; labels, styles, kwargs...)
+	_operator_axis!(ax, series; response_limit)
+	return _finish(fig, ax, series, legend, decorate)
 end
 
 _subset(::Nothing, indices) = nothing
@@ -203,11 +233,18 @@ function _trellis(position, series; columns, title, panel_titles, linkx, linky, 
 	offset = isempty(title) ? 0 : 1
 	isempty(title) || Label(grid[1, 1:min(columns, length(panels))], title; font=:bold)
 	axes = Axis[]
+	# Makie initializes a linked group from its first axis. Give every linked
+	# response panel the group's range, so panel order cannot clip other data.
+	# Mixed operators retain normal linked autoranging instead of fixing a
+	# response-only range onto panels with different units.
+	linked_response_limit = linky ? _response_limit(series) : nothing
 	for (n, panel) in enumerate(panels)
 		indices = findall(s -> s.panel == panel, series)
+		panel_series = series[indices]
+		response_limit = linky ? linked_response_limit : _response_limit(panel_series)
 		# Each panel owns a nested layout, so its legend cannot occupy another panel.
 		cell = GridLayout(grid[offset + cld(n, columns), mod1(n, columns)])
-		ModelPlotting.plotseries(cell[1, 1], series[indices]; title=titles[n],
+		_plot_panel(cell[1, 1], panel_series; title=titles[n], response_limit,
 			labels=_subset(labels, indices), styles=_subset(styles, indices), kwargs...)
 		push!(axes, content(cell[1, 1]))
 	end

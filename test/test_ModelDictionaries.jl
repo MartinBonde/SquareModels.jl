@@ -85,8 +85,8 @@ end
 	@test occursin("s[a, x]", output)
 	@test occursin("s[b, y]", output)
 	@test !occursin("=>", output)
-	@test SquareModels._table_layout(w).data[2, 2] == ""
-	printed = @prt(b, s)
+	@test ismissing(SquareModels._table_layout(w).data[2, 2])
+	printed = @evalexpr(b, s)
 	@test printed isa LabeledArray
 	@test printed.data isa SparseZeroArray
 	@test collect(keys(printed.data)) == collect(keys(s))
@@ -98,17 +98,17 @@ end
 	@test public_labeled[:b, :x, 2] isa SquareModels.Zero
 	@test map(identity, printed) isa SparseZeroArray
 	@test similar(printed, Float64) isa SparseZeroArray
-	difference = @prt(:d, b, s)
+	difference = @evalexpr(:d, b, s)
 	@test isnan(difference[:a, :x, 1])
 	@test difference[:a, :x, 2] == 1.0
 	@test difference[:b, :x, 2] isa SquareModels.Zero
-	@test (@prt(:p, b, s))[:a, :x, 2] == 100.0
-	@test (@prt(:q, b => b, s))[:a, :x, 2] == 0.0
+	@test (@evalexpr(:p, b, s))[:a, :x, 2] == 100.0
+	@test (@evalexpr(:q, b => b, s))[:a, :x, 2] == 0.0
 	@test split(output, '\n'; limit=2)[2] == sprint(show, MIME"text/plain"(), printed)
 	@test b[empty_s].indices isa SparseZeroArray
 	@test b[empty_s].indices.domain == empty_s.domain
 	@test sprint(show, MIME"text/plain"(), b[empty_s]) == "0-element Window"
-	@test sprint(show, MIME"text/plain"(), @prt(b, empty_s)) == "0-element table"
+	@test sprint(show, MIME"text/plain"(), @evalexpr(b, empty_s)) == "0-element table"
 	@test SquareModels._wrap_label("αβγδε", 2) == ["αβ", "γδ", "ε"]
 
 	unsorted = SquareModels._sparse_table_layout([(:a, 2), (:a, 1)], [2.0, 1.0])
@@ -160,19 +160,19 @@ end
 		@test all(plain_full[key...] == b[p[key...]] for key in keys(p.data))
 		plain_output = sprint(show, MIME"text/plain"(), plain)
 		@test startswith(plain_output, "3-element Window:\n")
-		@test SquareModels._table_layout(plain).data[2, 2] == ""
+		@test ismissing(SquareModels._table_layout(plain).data[2, 2])
 		@test replace(output, "s[" => "v[") == replace(plain_output, "p[" => "v[")
-		plain_printed = @prt(b, p)
+		plain_printed = @evalexpr(b, p)
 		@test plain_printed.data isa JuMP.Containers.SparseAxisArray
 		@test plain_printed.data.names == p.names
 		@test collect(keys(plain_printed.data.data)) == collect(keys(p.data))
 		@test split(plain_output, '\n'; limit=2)[2] == sprint(show, MIME"text/plain"(), plain_printed)
-		@test (@prt(:p, b, p))[:a, :x, 2] == 100.0
-		@test all((@prt(:q, b => b, p))[key...] == 0.0 for key in keys(p.data))
-		empty_plain = @prt(:p, b, empty_p)
+		@test (@evalexpr(:p, b, p))[:a, :x, 2] == 100.0
+		@test all((@evalexpr(:q, b => b, p))[key...] == 0.0 for key in keys(p.data))
+		empty_plain = @evalexpr(:p, b, empty_p)
 		@test empty_plain.data isa JuMP.Containers.SparseAxisArray
 		@test isempty(empty_plain.data.data)
-		joint = @prt(b, (s, p))
+		joint = @evalexpr(b, (s, p))
 		@test joint isa MultiVarResult
 		@test all(value -> value isa LabeledArray, joint)
 		joint_output = sprint(show, MIME"text/plain"(), joint)
@@ -194,7 +194,7 @@ end
 	one_layout = SquareModels._table_layout(one_db[one])
 	@test one_layout.combos == [()]
 	@test one_layout.periods == [1, 3]
-	@test occursin("year", sprint(show, MIME"text/plain"(), @prt(one_db, one)))
+	@test occursin("year", sprint(show, MIME"text/plain"(), @evalexpr(one_db, one)))
 
 	buffer = IOBuffer()
 	limited_io = IOContext(buffer, :limit => true, :displaysize => (8, 80))
@@ -205,9 +205,9 @@ end
 
 	buffer = IOBuffer()
 	limited_io = IOContext(buffer, :limit => true, :displaysize => (8, 80))
-	show(limited_io, MIME"text/plain"(), @prt(one_db, long))
+	show(limited_io, MIME"text/plain"(), @evalexpr(one_db, long))
 	limited_prt = String(take!(buffer))
-	unlimited_prt = sprint(show, MIME"text/plain"(), @prt(one_db, long))
+	unlimited_prt = sprint(show, MIME"text/plain"(), @evalexpr(one_db, long))
 	@test count('\n', limited_prt) < count('\n', unlimited_prt)
 end
 
