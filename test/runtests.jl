@@ -1,6 +1,7 @@
 using Test
 
 @testset "SquareModels Tests" begin
+	include("test_errors.jl")
 	include("test_Blocks.jl")
 	include("test_utils.jl")
 	include("test_ModelLayouts.jl")

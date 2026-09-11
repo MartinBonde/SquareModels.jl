@@ -169,6 +169,9 @@ _trivial_status(rhs::Float64) =
 
 # `show` must stay short and on one line. Julia escapes newlines here, and a
 # host that prints an exception with `show` then dumps one unreadable line.
-# The tables belong to `showerror`.
+# Human-readable display uses `showerror` so displaying a caught error retains
+# its diagnostic tables instead of falling back to this compact representation.
 Base.show(io::IO, e::SquareModelError) =
 	print(io, nameof(typeof(e)), "(", repr(first(split(e.msg, '\n'; limit=2))), ")")
+
+Base.show(io::IO, ::MIME"text/plain", e::SquareModelError) = showerror(io, e)
