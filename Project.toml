@@ -28,7 +28,7 @@ SquareModelsGDXInterfaceExt = "GDXInterface"
 SquareModelsMakieExt = "Makie"
 
 [compat]
-CSV = "0.10"
+CSV = "0.10, 1.0"
 DataFrames = "1"
 Dates = "1"
 Dictionaries = "0.4"
