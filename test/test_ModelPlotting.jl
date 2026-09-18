@@ -17,6 +17,47 @@ using SquareModels
 	end
 end
 
+@testset "Labelled series preserve axes and gaps" begin
+	years = 2010:2013
+	values = [1.0, nothing, missing, 4.0]
+	series = LabeledSeries(years, values, "Gaps", :q)
+	@test series.x == collect(years)
+	@test isequal(series.y, [1.0, NaN, NaN, 4.0])
+	@test series.op == :q
+	@test series.panel == ("Gaps", ())
+	@test isequal(labeled(values, "Gaps").y, series.y)
+	@test labeled(values, "Gaps").x == collect(1:4)
+	@test isempty(LabeledSeries(Int[], Float64[], "Empty").y)
+	@test_throws AssertionError LabeledSeries([2020], [1, 2], "Mismatch")
+	@test_throws AssertionError LabeledSeries([2020], [1, 2], "Mismatch", :q)
+	@test_throws AssertionError LabeledSeries([2020], [1, 2], "Mismatch", :q, ("Group", (:a,)))
+	@test isequal(LabeledSeries([1, 2], [NaN, Inf], "Numeric").y, [NaN, Inf])
+
+	cached = LabeledArray(values, (years,))
+	set_default_periods!(2030:2033)
+	try
+		@test labeled(cached, "Stored").x == collect(years)
+		@test isequal(labeled(cached, "Stored").y, series.y)
+		@test labeled(values, "Inherited"; xfrom=(cached,)).x == collect(years)
+		@test labeled([1, 2], "Fallback"; xfrom=(cached,)).x == [1, 2]
+		@test labeled(fill(3.0), "Scalar").y == [3.0]
+		@test labeled([3.0], "Scalar axis"; xfrom=(LabeledArray(fill(3.0), ()),)).x == [1]
+	finally
+		reset_print_defaults!()
+	end
+
+	m = Model()
+	JuMP.@variable(m, amount[t=2010:2013; t != 2011])
+	db = ModelDictionary(m)
+	db[amount] .= 2.0
+	db[amount[2012]] = nothing
+	sparse = @evalexpr db amount
+	@test labeled(sparse, "Sparse").x == [2010, 2012, 2013]
+	@test isequal(labeled(sparse, "Sparse").y, [2.0, NaN, 2.0])
+	@test labeled([1, 2, 3], "Inherited"; xfrom=(sparse,)).x == [2010, 2012, 2013]
+	@test labeled(db[amount], "Window").x == [2010, 2012, 2013]
+end
+
 using Makie
 
 @testset "Makie extension plotseries methods" begin
@@ -34,6 +75,51 @@ end
 	@test count(p -> p isa Makie.Lines, ax.scene.plots) == 1
 	@test plotseries(fig[2, 1][1, 1], [series]; legend=false) === fig
 	@test length(fig.content) == 2
+end
+
+@testset "Empty plots and trellis panels" begin
+	panel_axes(fig) = [ax for ax in fig.content if ax isa Makie.Axis]
+	no_data(ax) = any(p -> p isa Makie.Text && p.text[] == ["no data"], ax.scene.plots)
+	gap = LabeledSeries(2020:2021, [nothing, missing], "Gap")
+	for series in (LabeledSeries[], [gap], [LabeledSeries(Int[], Float64[], "Empty")]), layout in (:overlay, :trellis)
+		seen = []
+		legends = []
+		fig = plotseries(series; layout,
+			decorate=(ax, lines) -> push!(seen, lines),
+			legend=(fig, ax, lines) -> push!(legends, lines))
+		ax = only(panel_axes(fig))
+		@test no_data(ax)
+		@test !ax.xticksvisible[] && !ax.leftspinevisible[]
+		@test seen == [series]
+		@test isempty(legends)
+	end
+	fig = Makie.Figure()
+	@test plotseries(fig[2, 1], LabeledSeries[]; layout=:trellis, title="Empty report", panel_titles=[]) === fig
+	@test Makie.content(fig[2, 1]).title[] == "Empty report"
+	@test !any(c -> c isa Makie.Legend, fig.content)
+	@test_throws AssertionError plotseries(LabeledSeries[]; layout=:trellis, columns=0)
+	@test_throws AssertionError plotseries(LabeledSeries[]; layout=:trellis, panel_titles=["Extra"])
+	@test_throws AssertionError plotseries(LabeledSeries[]; layout=:trellis, labels=["Extra"])
+
+	live = LabeledSeries(2020:2021, [1.0, 2.0], "Live")
+	for series in ([gap, live], [live, gap])
+		fig = plotseries(series; layout=:trellis)
+		axes = panel_axes(fig)
+		@test no_data.(axes) == [s === gap for s in series]
+		@test [ax.title[] for ax in axes] == [s.label for s in series]
+		@test count(c -> c isa Makie.Legend, fig.content) == 1
+		@test all(ax -> minimum(ax.finallimits[])[1] > 2019, axes)
+	end
+	@test !no_data(only(panel_axes(plotseries([gap, live]; legend=false))))
+	# Validation callbacks must still reject bad data on an all-gap panel.
+	@test_throws AssertionError plotseries(gap; decorate=(ax, lines) -> @assert all(s -> all(isfinite, s.y), lines))
+	invalid = plotseries(LabeledSeries([1], [Inf], "Invalid"); legend=false)
+	@test !no_data(only(panel_axes(invalid)))
+
+	ax = Makie.Axis(Makie.Figure()[1, 1])
+	@test isempty(plotseries!(ax, LabeledSeries[]))
+	@test length(plotseries!(ax, gap)) == 1
+	@test !no_data(ax) && ax.xticksvisible[]
 end
 
 @testset "plotvar labels for single and multiple lines" begin
