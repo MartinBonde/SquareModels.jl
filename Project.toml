@@ -2,6 +2,7 @@ name = "SquareModels"
 uuid = "8f61fe60-8cc6-11ec-3043-2171a73045bd"
 version = "0.8.0"
 authors = ["Martin Kirk Bonde <martin@bonde.dk>"]
+description = "A JuMP extension for writing modular models with square systems of equations"
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"

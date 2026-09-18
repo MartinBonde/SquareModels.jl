@@ -110,6 +110,12 @@ _legend!(f::Function, fig, ax, series) = f(fig, ax, series)
 
 function _finish(fig, ax, series, legend, decorate)
 	decorate === nothing || decorate(ax, series)
+	if all(s -> all(isnan, s.y), series)
+		hidedecorations!(ax)
+		hidespines!(ax)
+		text!(ax, 0.5, 0.5; text="no data", space=:relative, align=(:center, :center))
+		return fig
+	end
 	_legend!(legend, fig, ax, series)
 	return fig
 end
@@ -223,11 +229,11 @@ _subset(values, indices) = values[indices]
 function _trellis(position, series; columns, title, panel_titles, linkx, linky, labels, styles, kwargs...)
 	@assert columns > 0 "Trellis columns must be positive."
 	panels = unique(s.panel for s in series)
-	@assert !isempty(panels) "A trellis plot needs at least one series."
 	titles = panel_titles === nothing ? [ModelPlotting._line_label(panel...) for panel in panels] : panel_titles
 	@assert length(titles) == length(panels) "Supply one title per panel."
 	labels === nothing || @assert length(labels) == length(series) "Supply one label per line."
 	styles === nothing || @assert length(styles) == length(series) "Supply one style per line."
+	isempty(panels) && return _plot_panel(position, series; title, labels, styles, kwargs...)
 	grid = GridLayout(position)
 	fig = Makie.get_top_parent(grid)
 	offset = isempty(title) ? 0 : 1

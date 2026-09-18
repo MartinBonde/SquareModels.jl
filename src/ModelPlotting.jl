@@ -85,8 +85,9 @@ plotseries(args...; kwargs...) = _plotting_error(:plotseries, args)
 plotseries!(args...; kwargs...) = _plotting_error(:plotseries!, args)
 alternating_dash!(args...; kwargs...) = _plotting_error(:alternating_dash!, args)
 
-"""Convert a value to Float64, mapping `nothing` to `NaN` (like missing data)."""
-_to_float(x) = x === nothing ? NaN : Float64(x)
+"""Convert a value to Float64, mapping `nothing` and `missing` to `NaN`."""
+_to_float(::Union{Nothing,Missing}) = NaN
+_to_float(x) = Float64(x)
 
 """Prefer numeric axes when all labels are numbers (e.g. years)."""
 function _coerce_axis(labels)
@@ -117,6 +118,9 @@ the common currency between `@plot`, `labeled`, and Makie (`convert_arguments`).
 Unlike a `Window` (a view onto model data), it holds eager, computed values; both
 share the [`AbstractSeries`](@ref) supertype.
 
+`x` and `y` must have the same length. Values of `nothing` and `missing` in `y`
+become `NaN`, which Makie draws as gaps.
+
 `op` records the print/plot operator (e.g. `:m`, `:q`) that produced `y`, used to
 pick a default y-axis label (see `_op_axis_label`) without cluttering the legend
 label itself.
@@ -127,6 +131,10 @@ struct LabeledSeries <: AbstractSeries
 	label::String
 	op::Symbol
 	panel::Tuple{String,Tuple}
+	function LabeledSeries(x, y, label, op, panel)
+		@assert length(x) == length(y) "Series '$label' needs one value for each x coordinate."
+		return new(collect(x), Float64[_to_float(value) for value in y], label, op, panel)
+	end
 end
 LabeledSeries(x, y, label, op=:n) = LabeledSeries(x, y, label, op, (label, ()))
 
@@ -155,12 +163,16 @@ function expand(w::Window)
 end
 
 to_series(w::Window) = (s = only(expand(w)); (s.x, s.y))
+to_series(v::LabeledArray) = (s = only(_array_lines(v, "", ())); (s.x, s.y))
+axis_of(v::LabeledArray) = isempty(v.dims) ? nothing : _coerce_axis(collect(v.dims[end]))
+axis_of(v::LabeledArray{T,N,A}) where {T,N,A<:_SparseTableArray} =
+	_coerce_axis(collect(_table_layout(v.data).periods))
 
 # Sparse layouts contain only live leading-index combinations. A gap stays NaN.
 function _layout_lines(layout, name)
 	x = _coerce_axis(collect(layout.periods))
 	return [LabeledSeries(x,
-		[ismissing(v) ? NaN : _to_float(v) for v in layout.data[:, j]],
+		layout.data[:, j],
 		_line_label(name, combo), :n, (name, combo))
 		for (j, combo) in enumerate(layout.combos)]
 end
@@ -172,9 +184,9 @@ expand(w::Window{<:Any,<:_SparseTableArray}) = _layout_lines(_table_layout(w), s
 Build a `LabeledSeries` from `values` (a `Window`, array, or number).
 
 `label` becomes the legend entry. The x-axis is taken from `values` when it is a
-`Window`; otherwise the first matching-length `Window` in `xfrom` supplies it
-(this is how `@plot` reattaches a year axis to an arithmetic expression). Falls
-back to `1:length` when no axis is available.
+`Window` or `LabeledArray` with one line; otherwise the first matching-length
+labelled value in `xfrom` supplies it. This is how `@plot` reattaches a year axis
+to an arithmetic expression. Falls back to `1:length` when no axis is available.
 
 Use directly for programmatic plotting:
 ```julia

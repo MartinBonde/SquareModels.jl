@@ -333,6 +333,13 @@ overrides it. Each panel owns a nested grid for its axis and theme legend.
 `plotseries` accepts the same `layout=:trellis` options, also at an existing grid
 position. All figure builders return the containing Makie `Figure`.
 
+Empty input produces one panel marked "no data", including with `layout=:trellis`.
+A panel whose lines have no values or only `NaN` gaps gets the same message.
+These panels keep their titles but hide ticks, axis labels, spines, and legends.
+`decorate` still runs on each panel, so callbacks can check values; callbacks
+that calculate annotations must handle empty data. Legend functions do not run
+on these panels. `plotseries!` leaves existing axes unchanged.
+
 ## Labels, styles, and existing axes
 
 Pass `labels` and `styles` in expanded line order. Each style is a NamedTuple of
@@ -348,6 +355,10 @@ Makie line options. These explicit styles override the automatic dash cycle:
 For numeric series, `plotseries!(ax, series; ...)` adds lines to an existing axis
 and returns their handles. It does not add a legend or change the axis labels.
 Use `labeled(values, name)` or `LabeledSeries(years, values, name)` to supply data.
+`labeled` keeps the stored axis of a `Window` or `LabeledArray` that contains one
+line. Plain arrays use `1:length(values)` unless `xfrom` supplies a matching axis.
+Use `LabeledSeries` to supply an explicit axis; its length must match the values.
+Both functions convert `nothing` and `missing` values to `NaN` gaps.
 
 ### Alternating dash for repeated variables
 

@@ -841,9 +841,15 @@ function _simple_format_df(df::DataFrame)
 	return df[.!ismissing.(df.value), [:variable, :indices, :value]]
 end
 
+function _read_parquet_df(path::AbstractString)
+	# Windows keeps memory-mapped files locked until garbage collection, even
+	# after closing the Dataset. Read into memory so the file is released promptly.
+	return DataFrame(Parquet2.Dataset(path; use_mmap=!Sys.iswindows()))
+end
+
 function _read_simple_df(path::AbstractString)
 	ext = lowercase(path)
-	df = endswith(ext, ".csv") ? CSV.read(path, DataFrame) : DataFrame(Parquet2.Dataset(path))
+	df = endswith(ext, ".csv") ? CSV.read(path, DataFrame) : _read_parquet_df(path)
 	return _simple_format_df(df)
 end
 
@@ -990,7 +996,7 @@ end
 
 """Load from a Parquet file."""
 function _load_parquet(path::AbstractString, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
-	df = DataFrame(Parquet2.Dataset(path))
+	df = _read_parquet_df(path)
 	data_df = if "variable" in names(df) && "indices" in names(df)
 		_simple_format_df(df)
 	elseif "name" in names(df) && "id" in names(df)
