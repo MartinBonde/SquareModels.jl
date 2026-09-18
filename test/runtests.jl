@@ -6,6 +6,7 @@ using Test
 	include("test_utils.jl")
 	include("test_ModelLayouts.jl")
 	include("test_ModelDictionaries.jl")
+	include("test_ParquetIO.jl")
 	include("test_ModelDictionaryStorage.jl")
 	include("test_WindowAssignment.jl")
 	include("test_ModelDictionaryBroadcast.jl")
