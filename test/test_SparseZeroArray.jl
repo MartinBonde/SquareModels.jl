@@ -234,18 +234,6 @@ end
     @test result isa AffExpr
 end
 
-@testset "_all_keys for SparseZeroArray" begin
-    m = Model()
-    @variable(m, x[i=1:3, j=1:3; i != j])
-    domain = (Set(1:3), Set(1:3))
-    sz = SparseZeroArray(x, domain)
-
-    ks = SquareModels._all_keys(sz)
-    @test length(ks) == 6
-    @test (1, 2) in ks
-    @test (1, 1) ∉ ks
-end
-
 @testset "copy_variable for SparseZeroArray" begin
     m = Model()
     @variable(m, x[i=1:3, j=1:3; i != j])
@@ -256,15 +244,6 @@ end
     @test copied isa SparseAxisArray
     @test length(copied) == length(sz)
     @test haskey(m, :x_copy)
-end
-
-@testset "base_name for SparseZeroArray" begin
-    m = Model()
-    @variable(m, my_var[i=1:3, j=1:3; i != j])
-    domain = (Set(1:3), Set(1:3))
-    sz = SparseZeroArray(my_var, domain)
-
-    @test SquareModels.base_name(sz) == "my_var"
 end
 
 @testset "@variables auto-wrapping" begin

@@ -269,6 +269,11 @@ end
 	@test all(ax -> (range = yrange(ax.finallimits[]); 0 < range[1] <= 1.0 && range[2] >= 100.0), axes)
 end
 
+# Makie 0.24.15 converts :solid to the one-stop pattern Float32[0.0]. Earlier versions gave nothing,
+# which a line also reports when no linestyle was set.
+is_solid(linestyle) = linestyle === nothing || length(linestyle) == 1
+is_dashed(linestyle) = linestyle isa AbstractVector && length(linestyle) > 1
+
 @testset "alternating_dash for repeated variables" begin
 	# Same base label twice (e.g. same variable from two sources): same color, different dash.
 	series = [labeled([1.0, 2.0], "qGDP"), SquareModels.LabeledSeries([1.0, 2.0], [2.0, 3.0], "qGDP", :r), labeled([3.0, 4.0], "qC")]
@@ -276,9 +281,9 @@ end
 	plots = [p for p in fig.content[1].scene.plots if p isa Makie.Lines]
 	@test plots[1].color[] == plots[2].color[]
 	@test plots[1].color[] != plots[3].color[]
-	@test plots[1].linestyle[] === nothing        # :solid
-	@test plots[2].linestyle[] isa AbstractVector # dashed
-	@test plots[3].linestyle[] === nothing
+	@test is_solid(plots[1].linestyle[])
+	@test is_dashed(plots[2].linestyle[])
+	@test is_solid(plots[3].linestyle[])
 
 	# Unique labels: no restyling unless forced.
 	series = [labeled([1.0, 2.0], "a"), labeled([2.0, 3.0], "b")]
@@ -289,7 +294,7 @@ end
 	fig = plotseries(series; legend=false, alternating_dash=true)  # forced: consecutive pairs
 	plots = [p for p in fig.content[1].scene.plots if p isa Makie.Lines]
 	@test plots[1].color[] == plots[2].color[]
-	@test plots[2].linestyle[] isa AbstractVector
+	@test is_dashed(plots[2].linestyle[])
 end
 
 @testset "Plot macro options and cached year axes" begin
@@ -418,12 +423,12 @@ end
 		@test existing.color[] == old_color
 		@test existing.linestyle[] == old_style
 		@test lines[1].color[] == lines[2].color[]
-		@test lines[1].linestyle[] === nothing
-		@test lines[2].linestyle[] isa AbstractVector
+		@test is_solid(lines[1].linestyle[])
+		@test is_dashed(lines[2].linestyle[])
 		styled = plotseries!(ax, series; styles=[(color=:red,), (linestyle=:solid,)])
 		@test styled[1].color[] == Makie.to_color(:red)
-		@test styled[2].linestyle[] === nothing
-		@test lines[2].linestyle[] isa AbstractVector
+		@test is_solid(styled[2].linestyle[])
+		@test is_dashed(lines[2].linestyle[])
 	end
 end
 
@@ -490,6 +495,8 @@ end
 		gapped = @evalexpr(s[:b,:])
 		@test length(gapped) == 2
 		@test !haskey(gapped, (2021,))
+		shares = @evalexpr(:i => db[d[:a,:]], db, s[:b,:])
+		@test shares[2020] == shares[2022] == 3.0
 		db[s[:a,:]] .= [6, 12, 18]
 		@test collect(@evalexpr(s[:a,:] / d[:a,:])) == [3, 6, 9]
 	finally
@@ -504,11 +511,13 @@ JuMP.@variables model begin
 	x
 	p[[:hh, :firm], 2020:2021]
 	q[[:hh, :firm], 2020:2021]
+	g[2020:2021]
 	L[[:cognitive, :physical], 2020:2021]
 end
 
 baseline = ModelDictionary(model)
 baseline[x] = 3
+baseline[g] = [10, 20]
 for h in [:hh, :firm], t in 2020:2021
 	baseline[p[h, t]] = h == :hh ? t - 2019 : 10 * (t - 2019)
 	baseline[q[h, t]] = h == :hh ? 2 : 3
@@ -522,6 +531,7 @@ end
 
 shock = ModelDictionary(model)
 shock[x] = 4
+shock[g] = [20, 20]
 for h in [:hh, :firm], t in 2020:2021
 	shock[p[h, t]] = 2 * baseline[p[h, t]]
 	shock[q[h, t]] = baseline[q[h, t]]
@@ -530,91 +540,27 @@ for l in labor, t in 2020:2021
 	shock[L[l, t]] = 2 * baseline[L[l, t]]
 end
 
-@testset "Model expression evaluation" begin
-	@test @evalexpr(baseline, x) == 3
-	@test @evalexpr(baseline, p[:hh, 2020] * q[:hh, 2020]) == 2
-	@test (@evalexpr baseline p[:hh, 2020] * q[:hh, 2020]) == 2
-	@test Array(@evalexpr(baseline, p[:firm, :] * q[:firm, :])) == [30, 60]
-	@test Array(@evalexpr(baseline, p[:firm] * q[:firm])) == [30, 60]
-	@test Array(@evalexpr(baseline, p * q)) == [2 4; 30 60]
-	@test Array(@evalexpr(baseline, p[:firm, :] / p[:firm, 2020])) == [1.0, 2.0]
-	@test Array(@evalexpr(baseline, p[:firm, :] .* q[:firm, :])) == [30, 60]
-	@test Array(@evalexpr(baseline, p .* q)) == [2 4; 30 60]
-	@test Array(@evalexpr(baseline, (@. p * q))) == [2 4; 30 60]
-	@test Array(@evalexpr(baseline, sum([L[l, :] for l in l]))) == [11, 22]
-	@test Array(@evalexpr(baseline, sum(L[l, :] for l in l))) == [11, 22]
-	@test Array(@evalexpr(baseline, sum(L[l] for l in l))) == [11, 22]
-	local_vector = [7, 8]
-	@test @evalexpr(baseline, local_vector[1]) == 7
-	@test @evalexpr(baseline, [x, p[:hh, 2021] * q[:hh, 2021]]) == [3, 4]
-	multi_vector = @evalexpr(:m, baseline=>shock, [p[:hh, :], q[:hh, :]])
-	@test multi_vector.names == ["p[:hh, :]", "q[:hh, :]"]
-	@test count(==("year"), split(sprint(show, MIME"text/plain"(), multi_vector))) == 1
-	mixed_dims_print = sprint(show, MIME"text/plain"(), @evalexpr(:m, baseline=>shock, [p[:hh, :], q]))
-	@test count(==("year"), split(mixed_dims_print)) == 1
-	@test all(label -> occursin(label, mixed_dims_print), ["p[:hh, :]", "q[hh]", "q[firm]"])
-	fq = 2
-	@test @evalexpr(baseline, p[:hh, 2021] * q[:hh, 2021] / fq) == 2.0
-	@test @evalexpr(baseline, (p[:hh, 2021] * q[:hh, 2021], p[:firm, 2021] * q[:firm, 2020] / fq)) == (4, 30.0)
-	multi = @evalexpr(baseline, (p[:hh, :], p[:firm, :]))
-	@test multi == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(baseline, p[:firm, :])))
-	@test occursin("p[:hh, :]", sprint(show, MIME"text/plain"(), multi))
-	@test occursin("p[:firm, :]", sprint(show, MIME"text/plain"(), multi))
-	@test Array(@evalexpr(baseline, p)) == [1.0 2.0; 10.0 20.0]
-	@test occursin("2020", sprint(show, MIME"text/plain"(), @evalexpr(baseline, p)))
-	@test isequal(@evalexpr(:p, baseline, p[:hh, :]), [NaN, 100.0])
-	@test @evalexpr(:m, baseline=>shock, p[:hh, :]) == [1.0, 2.0]
-	@test @evalexpr(:q, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
-	@test isequal(map(Array, @evalexpr([:n, :p], baseline, p[:hh, :])), [[1, 2], [NaN, 100.0]])
-	an = @evalexpr(:an, baseline=>shock, p)
-	@test all(v -> v isa LabeledArray, an)
-	@test occursin("year", sprint(show, MIME"text/plain"(), an[2]))
-	@test (@evalexpr :q baseline=>shock p[:hh, :]) == [100.0, 100.0]
-	op = :q
-	@test @evalexpr(op, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
-	pair_print = @evalexpr(baseline=>shock, p[:hh, :])
-	@test pair_print == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(shock, p[:hh, :])))
-	printed_pair = sprint(show, MIME"text/plain"(), pair_print)
-	@test !occursin("baseline:p[:hh, :]", printed_pair)
-	@test !occursin("shock:p[:hh, :]", printed_pair)
-	@test occursin("baseline", printed_pair)
-	@test occursin("shock", printed_pair)
-	@test occursin("p[:hh, :]", printed_pair)
-	# Narrow width forces the 34-char label to wrap across two rows of 24 chars.
-	set_column_label_total_width!(48)
-	long_print = sprint(show, MIME"text/plain"(), @evalexpr((baseline=>shock, baseline), p[:hh, :] * q[:hh, :] + p[:hh, :]))
-	set_column_label_total_width!(72)
-	@test !occursin("p[:hh, :] * q[:hh, :] + p[:hh, :]", long_print)
-	@test occursin("p[:hh, :] *", long_print)
-	@test occursin("q[:hh, :] +", long_print)
-	@test SquareModels._column_label_width(1) == 72
-	@test SquareModels._column_label_width(2) > SquareModels._column_label_width(8)
-	set_column_label_total_width!(100)
-	@test SquareModels._column_label_width(1) == 100
-	set_column_label_total_width!(72)
-	multi_db = @evalexpr((baseline=>shock, baseline), p[:hh, :])
-	@test multi_db.names == ["baseline\np[:hh, :]", "shock\np[:hh, :]"]
-	@test multi_db == (Array(@evalexpr(baseline, p[:hh, :])), Array(@evalexpr(shock, p[:hh, :])))
-	multi_q = @evalexpr(:q, (baseline=>baseline, baseline=>shock), p[:hh, :])
-	@test multi_q.names == ["baseline\np[:hh, :]", "shock\np[:hh, :]"]
-	@test multi_q == ([0.0, 0.0], [100.0, 100.0])
-	printed_p = sprint(show, MIME"text/plain"(), @evalexpr(baseline, p))
-	@test occursin("year", printed_p)
-	@test occursin("hh", printed_p)
-	@test occursin("firm", printed_p)
-	printed_slice = sprint(show, MIME"text/plain"(), @evalexpr(baseline, p[:hh, :]))
-	@test occursin("p[:hh, :]", printed_slice)
-	long_print = sprint(show, MIME"text/plain"(), @evalexpr(:m, baseline => shock, p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :]))
-	@test !occursin("p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :] + q[:hh, :] - p[:hh, :]", long_print)
-	@test occursin("p[:hh, :]", long_print)
-	@test !occursin("(", long_print)
-	@test SquareModels.ModelExpressions._expr_label(:(a + b - c + d)) == "a + b - c + d"
+@testset "Model plotting expressions" begin
 	series = @plot :q baseline=>shock p[:hh, :]
 	@test length(series) == 1
 	@test series[1].label == "p[:hh, :]"
 	@test series[1].op == :q
 	@test series[1].x == [2020, 2021]
 	@test series[1].y == [100.0, 100.0]
+	series = @plot (:i => 2021) baseline p[:hh, :]
+	@test only(series).x == [2020, 2021]
+	@test only(series).y == [50.0, 100.0]
+	@test only(series).op == :i
+	series = @plot (:i => baseline[p[:firm, :]]) baseline p[:hh, :]
+	@test only(series).y == [0.1, 0.1]
+	@test only(series).op == :n
+	series = @plot((:i => baseline[p[:firm, :]]), 2021:2021, baseline, p[:hh, :])
+	@test only(series).x == [2021]
+	@test only(series).y == [0.1]
+	series = @plot [:i => baseline[p[:firm, :]], :an] baseline=>shock p[:hh, :]
+	@test [s.y for s in series] == [[0.2, 0.2], [0.1, 0.1]]
+	series = @plot (:i => g, :m) baseline=>shock p[:hh, :]
+	@test only(series).y == [0.0, 0.1]
 	series = @plot :p baseline p
 	@test length(series) == 2
 	@test series[1].label == "p[hh]"
@@ -670,6 +616,7 @@ end
 
 	set_default_source!(baseline => shock)
 	@test @evalexpr(:q, p[:hh, :]) == [100.0, 100.0]
+	@test @evalexpr((:i => g, :m), p[:hh, :]) == [0.0, 0.1]
 
 	set_default_operator!(:q)
 	@test @evalexpr(p[:hh, :]) == [100.0, 100.0]

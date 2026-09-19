@@ -1,6 +1,6 @@
 name = "SquareModels"
 uuid = "8f61fe60-8cc6-11ec-3043-2171a73045bd"
-version = "0.8.0"
+version = "0.9.0"
 authors = ["Martin Kirk Bonde <martin@bonde.dk>"]
 description = "A JuMP extension for writing modular models with square systems of equations"
 
@@ -28,7 +28,7 @@ SquareModelsGDXInterfaceExt = "GDXInterface"
 SquareModelsMakieExt = "Makie"
 
 [compat]
-CSV = "0.10"
+CSV = "0.10, 1.0"
 DataFrames = "1"
 Dates = "1"
 Dictionaries = "0.4"

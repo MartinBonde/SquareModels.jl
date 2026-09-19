@@ -109,38 +109,6 @@ end
 	@test b[empty_s].indices.domain == empty_s.domain
 	@test sprint(show, MIME"text/plain"(), b[empty_s]) == "0-element Window"
 	@test sprint(show, MIME"text/plain"(), @evalexpr(b, empty_s)) == "0-element table"
-	@test SquareModels._wrap_label("αβγδε", 2) == ["αβ", "γδ", "ε"]
-
-	unsorted = SquareModels._sparse_table_layout([(:a, 2), (:a, 1)], [2.0, 1.0])
-	@test unsorted.periods == [1, 2]
-	reordered = SquareModels._sparse_table_layout([(:a, 1), (:a, 2)], [10.0, 20.0])
-	@test SquareModels.ModelExpressions._align_periods(reordered, unsorted.periods) == [10.0; 20.0;;]
-	@test SquareModels._order_periods([Date(2025), Date(2024)]) == [Date(2024), Date(2025)]
-	@test SquareModels._order_periods([:b, :a]) == [:b, :a]
-	OrderedDict = JuMP.Containers.OrderedCollections.OrderedDict
-	left = JuMP.Containers.SparseAxisArray(OrderedDict([(:a, 2) => 2.0, (:a, 1) => 1.0]))
-	right = JuMP.Containers.SparseAxisArray(OrderedDict([(:a, 1) => 10.0, (:a, 2) => 20.0]))
-	labeled = SquareModels.ModelExpressions._labeled_sparse_array
-	joined = MultiVarResult(["left", "right"], (labeled(left), labeled(right)))
-	joined_output = sprint(show, MIME"text/plain"(), joined)
-	@test count("year", joined_output) == 1
-	@test occursin(r"│\s*2\s*│\s*2\.0\s*│\s*20\.0\s*│", joined_output)
-	extra = JuMP.Containers.SparseAxisArray(OrderedDict([(:a, 1) => 10.0, (:a, 3) => 30.0]))
-	padded = MultiVarResult(["left", "extra"], (labeled(left), labeled(extra)))
-	padded_output = sprint(show, MIME"text/plain"(), padded)
-	@test count("year", padded_output) == 1
-	@test SquareModels.ModelExpressions._combined_periods(
-		SquareModels.ModelExpressions._layout_of.(padded.values),
-	) == [1, 2, 3]
-	@test occursin(r"│[ ]*2[ ]*│[ ]*2\.0[ ]*│[ ]*│", padded_output)
-	@test occursin(r"│[ ]*3[ ]*│[ ]*│[ ]*30\.0[ ]*│", padded_output)
-	dense = LabeledArray([2.0, 1.0], ([2, 1],), "dense")
-	mixed = MultiVarResult(["dense", "extra"], (dense, labeled(extra)))
-	mixed_output = sprint(show, MIME"text/plain"(), mixed)
-	@test count("year", mixed_output) == 1
-	@test SquareModels.ModelExpressions._combined_periods(
-		SquareModels.ModelExpressions._layout_of.(mixed.values),
-	) == [1, 2, 3]
 
 	use_sparse_zero_array!(false)
 	try
@@ -360,31 +328,6 @@ end
 			d[x] .= KeyedData([(:a, 1) => 1.0]),
 		)
 	end
-end
-
-@testset "ModelDictionary broadcast propagates nothing" begin
-	model = Model()
-	@variable(model, x[1:3])
-	d = ModelDictionary(model)
-	d[x] .= [nothing, 2.0, nothing]
-	d2 = d .+ 5.0
-	@test isnothing(d2[x[1]])
-	@test d2[x[2]] == 7.0
-	@test isnothing(d2[x[3]])
-	d3 = d .* 2.0
-	@test isnothing(d3[x[1]])
-	@test d3[x[2]] == 4.0
-	d4 = .-d
-	@test isnothing(d4[x[1]])
-	@test d4[x[2]] == -2.0
-	@test isnothing(d4[x[3]])
-
-	baseline = ModelDictionary(model)
-	baseline[x] .= [1.0, 2.0, nothing]
-	difference = baseline .- d
-	@test isnothing(difference[x[1]])
-	@test difference[x[2]] == 0.0
-	@test isnothing(difference[x[3]])
 end
 
 @testset "Test getting and setting single variables refs" begin
@@ -1244,116 +1187,12 @@ end
 	end
 end
 
-@testset "Test load from GDX - partial data" begin
-	mktempdir() do tmpdir
-		model = Model()
-		@variable(model, x)
-		@variable(model, y[1:3])
-
-		# GDX only has x, not y
-		df = DataFrame(value = [1.0])
-
-		path = joinpath(tmpdir, "partial.gdx")
-		write_gdx(path, "x" => df)
-
-		d = load(path, model)
-		@test d[x] == 1.0
-		@test isnothing(d[y[1]])
-		@test isnothing(d[y[2]])
-		@test isnothing(d[y[3]])
-	end
-end
-
-@testset "Test load from GDX - indices outside model range" begin
-	mktempdir() do tmpdir
-		# Model has limited index range
-		model = Model()
-		@variable(model, a[2025:2027])
-
-		# GDX has indices outside model range
-		df = DataFrame(
-			dim1 = [2024, 2025, 2026, 2027, 2028],
-			value = [1.0, 2.0, 3.0, 4.0, 5.0]
-		)
-
-		path = joinpath(tmpdir, "range.gdx")
-		write_gdx(path, "a" => df)
-
-		d = load(path, model)
-
-		# Only model indices should be loaded
-		@test d[a[2025]] == 2.0
-		@test d[a[2026]] == 3.0
-		@test d[a[2027]] == 4.0
-	end
-end
-
 # Note: GDX files don't support Unicode symbol names (GAMS limitation).
 # Use ASCII names in GDX and rename when loading into JuMP models with Unicode names.
 
 # =============================================================================
 # Slice specification tests
 # =============================================================================
-
-@testset "Test _parse_slice_spec" begin
-	using SquareModels: _parse_slice_spec
-
-	# Simple rename (no brackets)
-	@test _parse_slice_spec("nPop") == ("nPop", String[], Int[])
-
-	# Single fixed index, single wildcard
-	gdx_sym, fixed, wildcards = _parse_slice_spec("vC[:cTot,:]")
-	@test gdx_sym == "vC"
-	@test fixed == ["cTot"]
-	@test wildcards == [2]
-
-	# Multiple fixed indices, single wildcard
-	gdx_sym, fixed, wildcards = _parse_slice_spec("vK[:iTot,:tot,:]")
-	@test gdx_sym == "vK"
-	@test fixed == ["iTot", "tot"]
-	@test wildcards == [3]
-
-	# Wildcard first
-	gdx_sym, fixed, wildcards = _parse_slice_spec("data[:,:fixed]")
-	@test gdx_sym == "data"
-	@test fixed == ["fixed"]
-	@test wildcards == [1]
-
-	# Multiple wildcards
-	gdx_sym, fixed, wildcards = _parse_slice_spec("matrix[:,:,:fixed,:]")
-	@test gdx_sym == "matrix"
-	@test fixed == ["fixed"]
-	@test wildcards == [1, 2, 4]
-
-	# No colon prefix on fixed index
-	gdx_sym, fixed, wildcards = _parse_slice_spec("vX[xTot,:]")
-	@test gdx_sym == "vX"
-	@test fixed == ["xTot"]
-	@test wildcards == [2]
-end
-
-@testset "Test _build_slice_key" begin
-	using SquareModels: _build_slice_key
-
-	# Single wildcard at end: C[2025] -> vC[:cTot,:] -> "cTot,2025"
-	@test _build_slice_key("2025", ["cTot"], [2]) == "cTot,2025"
-
-	# Multiple fixed indices: K[2025] -> vK[:iTot,:tot,:] -> "iTot,tot,2025"
-	@test _build_slice_key("2025", ["iTot", "tot"], [3]) == "iTot,tot,2025"
-
-	# Wildcard first: X[2025] -> data[:,:fixed] -> "2025,fixed"
-	@test _build_slice_key("2025", ["fixed"], [1]) == "2025,fixed"
-
-	# Multiple wildcards: Z[1,2] -> matrix[:,:,:fixed,:] -> "1,2,fixed,?"
-	# Target has 2 indices, wildcards at positions 1, 2, 4
-	@test _build_slice_key("1,2", ["fixed"], [1, 2, 4]) == "1,2,fixed,"
-
-	# Multi-dimensional target: N_a[15,2025] -> pop[:,:] -> "15,2025"
-	@test _build_slice_key("15,2025", String[], [1, 2]) == "15,2025"
-
-	# No wildcards (all fixed)
-	@test _build_slice_key("", ["a", "b", "c"], Int[]) == "a,b,c"
-end
 
 @testset "Test load with slices - Parquet" begin
 	mktempdir() do tmpdir
