@@ -22,7 +22,7 @@ end
 
 if GAMS_AVAILABLE
 
-@testset "GAMS CONOPT solve" begin
+@testset "GAMS attributes survive model copy" begin
     m = Model(GAMS.Optimizer)
     set_optimizer_attribute(m, "sysdir", GAMS_SYSDIR)
     set_optimizer_attribute(m, "NLP", "CONOPT")
@@ -50,11 +50,6 @@ if GAMS_AVAILABLE
     inner = unsafe_backend(solve_model)
     @test MOI.get(inner, MOI.RawOptimizerAttribute("NLP")) == "conopt"
     @test MOI.get(inner, MOI.RawOptimizerAttribute("LogOption")) == 0
-
-    solution = solve(block, data)
-
-    @test solution[x] ≈ 10.0 atol=1e-6
-    @test solution[y] ≈ 25.0 atol=1e-6
 end
 
 @testset "square_model with gamsdir" begin

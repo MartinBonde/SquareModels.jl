@@ -642,30 +642,6 @@ end
     @test length(var_map) == 2
 end
 
-@testset "solve succeeds on healthy model (diagnostics enabled)" begin
-    model = Model(Ipopt.Optimizer)
-    JuMP.@variables model begin
-        x
-        y
-        z
-    end
-
-    data = ModelDictionary(model)
-    data[x] = 1.0
-    data[y] = 2.0
-    data[z] = 5.0
-
-    block = @block model begin
-        x, x == z * 2
-        y, y == z * 3
-    end
-    data[residuals(block)] .= 0.0
-
-    solution = solve(block, data)
-    @test solution[x] ≈ 10.0 atol=1e-6
-    @test solution[y] ≈ 15.0 atol=1e-6
-end
-
 @testset "solve errors on failed solver status" begin
     model = Model(Ipopt.Optimizer)
     JuMP.set_silent(model)

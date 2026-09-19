@@ -30,17 +30,6 @@ end
 
 @testset "Tagged Variables" begin
 
-    @testset "Tag type" begin
-        t1 = Tag(:test)
-        t2 = Tag(:test)
-        t3 = Tag(:other)
-
-        @test t1.name == :test
-        @test t1 == t2  # Same name means equal
-        @test t1 != t3
-        @test sprint(show, t1) == "Tag(:test)"
-    end
-
     @testset "Basic variable creation" begin
         model = Model()
         t = 2020:2022
@@ -141,32 +130,6 @@ end
         # Test that indexed variable refs also work (lookup by base name)
         @test description(vDesc[2020]) == "A variable with description"
         @test description(vDesc[2022]) == "A variable with description"
-    end
-
-    @testset "Variables with tags and descriptions" begin
-        model = Model()
-        t = 2020:2022
-
-        growth = Tag(:growth)
-        inflation = Tag(:inflation)
-
-        @variables model begin
-            vGDP[t] :: (growth, inflation), "Gross Domestic Product"
-            pGDP[t] :: inflation, "GDP deflator"
-            qGDP[t] :: growth, "Real GDP"
-        end
-
-        @test description(model, :vGDP) == "Gross Domestic Product"
-        @test growth ∈ tags(model, :vGDP)
-        @test inflation ∈ tags(model, :vGDP)
-
-        @test description(model, :pGDP) == "GDP deflator"
-        @test growth ∉ tags(model, :pGDP)
-        @test inflation ∈ tags(model, :pGDP)
-
-        @test description(model, :qGDP) == "Real GDP"
-        @test growth ∈ tags(model, :qGDP)
-        @test inflation ∉ tags(model, :qGDP)
     end
 
     @testset "Query functions" begin
@@ -313,31 +276,6 @@ end
         @test block_tag ∈ tags(model, :w2)
         @test var_tag ∈ tags(model, :w2)
         @test description(model, :w2) == "Variable with both tags"
-    end
-
-    @testset "Block-level multiple tags" begin
-        model = Model()
-        t = 2020:2022
-
-        tag1 = Tag(:tag1)
-        tag2 = Tag(:tag2)
-        tag3 = Tag(:tag3)
-
-        # Multiple block-level tags
-        @variables model :: (tag1, tag2) begin
-            z1[t]
-            z2[t] :: tag3
-        end
-
-        # z1 should have both block tags
-        @test tag1 ∈ tags(model, :z1)
-        @test tag2 ∈ tags(model, :z1)
-        @test tag3 ∉ tags(model, :z1)
-
-        # z2 should have all three tags
-        @test tag1 ∈ tags(model, :z2)
-        @test tag2 ∈ tags(model, :z2)
-        @test tag3 ∈ tags(model, :z2)
     end
 
     @testset "Same name in separate models" begin

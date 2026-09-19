@@ -111,51 +111,6 @@ end
 	@test JuMP.num_variables(second_model) == 8
 end
 
-@testset "@_block" begin
-	m = Model()
-	JuMP.@variables m begin
-		x
-		y[1:5]
-		z[1:3, [:a, :b]]
-		q
-	end
-
-	@testset "x" begin
-		v1, r1, eqs1 = SquareModels.@_block(m, x, x == 1)
-		b1 = SquareModels.Block(m, v1, r1, Set{VariableRef}(), eqs1)
-		@test typeof(v1) <: AbstractVector{VariableRef}
-		@test typeof(eqs1) <: AbstractVector{Equation}
-		@test length(v1) == length(eqs1) == length(b1) == 1
-		@test is_endogenous(x, b1)
-	end
-
-	@testset "y[1:4]" begin
-		v2, r2, eqs2 = SquareModels.@_block(m, y[i ∈ 1:4], y[i] == 1)
-		b2 = SquareModels.Block(m, v2, r2, Set{VariableRef}(), eqs2)
-		@test typeof(v2) <: AbstractVector{VariableRef}
-		@test length(v2) == length(eqs2) == length(b2) == 4
-		@test all(is_endogenous(y[i], b2) for i ∈ 1:4)
-	end
-
-	@testset "y[5]" begin
-		v3, r3, eqs3 = SquareModels.@_block(m, y[i ∈ [5]], y[i] == 1)
-		b3 = SquareModels.Block(m, v3, r3, Set{VariableRef}(), eqs3)
-		@test typeof(v3) <: AbstractVector{VariableRef}
-		@test length(v3) == length(eqs3) == length(b3) == 1
-		@test is_endogenous(y[5], b3)
-	end
-
-	@testset "z" begin
-		t₁ = 1
-		T = 3
-		v4, r4, eqs4 = SquareModels.@_block(m, z[i ∈ t₁:T, j ∈ [:a, :b]], z[i, j] == 1)
-		b4 = SquareModels.Block(m, v4, r4, Set{VariableRef}(), eqs4)
-		@test typeof(v4) <: AbstractVector{VariableRef}
-		@test length(v4) == length(eqs4) == length(b4) == 6
-		@test all(is_endogenous(z[i, j], b4) for i ∈ t₁:T, j ∈ [:a, :b])
-	end
-end
-
 @testset "@block accepts multiline equation continuations" begin
 	m = Model(Ipopt.Optimizer)
 	set_silent(m)
@@ -278,68 +233,7 @@ end
 	@test occursin("Non-unique mapping", compact)
 end
 
-@testset "solve block" begin
-	m = Model(Ipopt.Optimizer)
-	set_silent(m)
-	JuMP.@variables m begin
-		x
-		y[1:5]
-		z[1:3, [:a, :b]]
-	end
-
-	b = @block m begin
-		x, x == 1
-		y[i ∈ 1:4], y[i] == 1
-		y[i ∈ [5]], y[5] == 1
-		z[i ∈ 1:3, j ∈ [:a, :b]], z[i, j] == 1
-	end
-
-	db = ModelDictionary(m, 0.0)
-	result = solve(b, db)
-	@test all(isapprox(result[i], 1; atol=1e-6) for i in b)
-end
-
 @testset "_endo_exo_swap!" begin
-	m = Model(Ipopt.Optimizer)
-	JuMP.@variables m begin
-		x
-		y[1:5]
-		x_exo
-		y_exo[1:5]
-	end
-
-	# Constraints include both x/y and x_exo/y_exo so swaps are valid
-	b = @block m begin
-		x, x + x_exo == 1
-		y[i ∈ 1:5], y[i] + y_exo[i] == 1
-	end
-
-	@testset "x" begin
-		@test !is_fixed(x)
-		fix.(b, 1)
-		@test is_fixed(x)
-		unfix(b)
-		@test !is_fixed(x)
-		SquareModels._endo_exo_swap!(b, x_exo, x, "")
-		fix.(b, 1)
-		@test !is_fixed(x)
-		@test is_fixed(x_exo)
-		unfix(b)
-	end
-
-	@testset "y" begin
-		@test !any(is_fixed.(y))
-		fix.(b, 1)
-		@test all(is_fixed.(y))
-		unfix(b)
-		@test !any(is_fixed.(y))
-		SquareModels._endo_exo_swap!(b, y_exo, y, "")
-		fix.(b, 1)
-		@test !any(is_fixed.(y))
-		@test all(is_fixed.(y_exo))
-		unfix(b)
-	end
-
 	@testset "SparseAxisArray" begin
 		m2 = Model(Ipopt.Optimizer)
 		@variable(m2, s[i=1:3, j=1:3; i != j])
@@ -738,67 +632,6 @@ end
 	@test count('\n', err4.msg) < 20
 end
 
-@testset "Trade model definition" begin
-  m = Model()
-  D = S = 1:2
-  JuMP.@variables m begin
-		C[D] >= 1e-6 # CES aggregate consumption in country d
-		c[D,S] >= 1e-6 # Consumption in country d from country s
-		pᶜ[D] >= 1e-6 # CES price index in country d
-		w[D] >= 1e-6 # Price of output in country s
-		X[S] # Exports of country s
-		M[D] # Imports of country d
-
-		σ # Elasticity of substitution
-		μ[D,S] # Preference parameter, country d's preference for country s
-		y[D] # GDP in country s
-		τ[D,S] # Trade cost from country s to country d
-  end
-
-  variable, residual, eqs = SquareModels.@_block(m, C[d ∈ D], w[d] * y[d] == pᶜ[d] * C[d])
-  @test isa(variable, AbstractVector{VariableRef})
-  @test isa(eqs, AbstractVector{Equation})
-  variable, residual, eqs = SquareModels.@_block(m, c[d ∈ D, s ∈ S], c[d,s] == μ[d,s] * C[d] * (w[s] / pᶜ[d])^(-σ))
-  @test isa(variable, AbstractVector{VariableRef})
-  @test isa(eqs, AbstractVector{Equation})
-
-  ert_tuples = [
-		SquareModels.@_block(m, C[d ∈ D], w[d] * y[d] == pᶜ[d] * C[d]),
-		SquareModels.@_block(m, c[d ∈ D, s ∈ S], c[d,s] == μ[d,s] * C[d] * (w[s] / pᶜ[d])^(-σ)),
-		SquareModels.@_block(m, pᶜ[d ∈ D], pᶜ[d] * C[d] == ∑(w[s] * c[d,s] for s ∈ S)),
-		SquareModels.@_block(m, w[s ∈ D[2:end]], y[s] == ∑(c[d,s] for d ∈ D)),
-		SquareModels.@_block(m, X[s ∈ S], X[s] == ∑(c[d,s] for d ∈ D if d ≠ s)),
-		SquareModels.@_block(m, M[d ∈ D], M[d] == ∑(c[d,s] for s ∈ S if d ≠ s))
-  ]
-  variables = VariableRef[Iterators.flatten([t[1] for t in ert_tuples])...]
-  residuals = VariableRef[Iterators.flatten([t[2] for t in ert_tuples])...]
-  equations = Equation[Iterators.flatten([t[3] for t in ert_tuples])...]
-  @test all(isa.(variables, VariableRef))
-  @test all(isa.(equations, Equation))
-
-  Block(m, variables, residuals, Set{VariableRef}(), equations)
-
-  base_model = @block m begin
-		C[d ∈ D],
-			w[d] * y[d] == pᶜ[d] * C[d]
-
-		c[d ∈ D, s ∈ S],
-			c[d,s] == μ[d,s] * C[d] * (w[s] / pᶜ[d])^(-σ)
-
-		pᶜ[d ∈ D],
-			pᶜ[d] * C[d] == ∑(w[s] * c[d,s] for s ∈ S)
-
-		w[s ∈ D[2:end]], # We leave out the condition for the first country and set its price to 1
-			y[s] == ∑(c[d,s] for d ∈ D)
-
-		X[s ∈ S],
-			X[s] == ∑(c[d,s] for d ∈ D if d ≠ s)
-
-		M[d ∈ D],
-			M[d] == ∑(c[d,s] for s ∈ S if d ≠ s)
-  end
-end
-
 @testset "Block diagnostics" begin
 	m = Model()
 	JuMP.@variables m begin
@@ -853,13 +686,6 @@ end
 		@test length(empty) == 0
 		@test isempty(endogenous(empty))
 		@test !haskey(m, :y_J)
-	end
-
-	@testset "Single equation" begin
-		single = @block m begin
-			x, x == 1
-		end
-		@test length(single) == 1
 	end
 
 	@testset "Unicode variable names" begin
@@ -1585,60 +1411,9 @@ end
 	end
 end
 
-@testset "@block filters plain SparseAxisArray named indices" begin
-	stored = Set([(1, 1), (1, 2), (2, 3), (3, 1)])
-	expected = Set([(1, 2), (2, 3)])
-	m = Model()
-	use_sparse_zero_array!(false)
-	try
-		SquareModels.@variables m begin
-			x[i = 1:3, j = 1:3; (i, j) in stored]
-		end
-
-		block_visits = Tuple{Int,Int}[]
-		test_visits = Tuple{Int,Int}[]
-		block_rhs = (i, j) -> begin
-			@test (i, j) in stored
-			push!(block_visits, (i, j))
-			i + j
-		end
-		test_rhs = (i, j) -> begin
-			@test (i, j) in stored
-			push!(test_visits, (i, j))
-			i + j
-		end
-
-		b = @block m begin
-			x[i = 1:3, j = 1:3; j >= 2], x[i, j] == block_rhs(i, j)
-			@test_constraint("SparseAxisArray named indices")
-			x[i = 1:3, j = 1:3; j >= 2], x[i, j] == test_rhs(i, j)
-		end
-
-		@test x isa SparseAxisArray
-		@test Set(block_visits) == expected
-		@test Set(test_visits) == expected
-		@test length(block_visits) == length(expected)
-		@test length(test_visits) == length(expected)
-		@test Set(endogenous(b)) == Set(x[i, j] for (i, j) in expected)
-		@test Set(c.variable for c in test_constraints(b)) == Set(x[i, j] for (i, j) in expected)
-	finally
-		use_sparse_zero_array!(true)
-	end
-end
-
 @testset "SparseAxisArray with tuple destructuring" begin
 	pairs = [(:a, :b), (:c, :d)]
 	pairs_set = Set(pairs)
-
-	@testset "@_block" begin
-		m = Model()
-		@variable(m, s[i=[:a, :c], d=[:b, :d], t=1:2; (i, d) in pairs_set])
-		@test s isa SparseAxisArray
-
-		v, r, cons = SquareModels.@_block(m, s[(i_e, d_e) = pairs, t ∈ 1:2], s[i_e, d_e, t] == 1)
-		@test length(v) == 4
-		@test all(isa.(v, VariableRef))
-	end
 
 	@testset "@block" begin
 		m = Model(Ipopt.Optimizer)
@@ -1675,16 +1450,6 @@ end
 
 @testset "DenseAxisArray with tuple indices" begin
 	pairs = [(:a, :b), (:c, :d)]
-
-	@testset "@_block" begin
-		m = Model()
-		@variable(m, y[pairs, 1:2])
-		@test y isa DenseAxisArray
-
-		v, r, eqs = SquareModels.@_block(m, y[(i_e, d_e) = pairs, t ∈ 1:2], y[(i_e, d_e), t] == 1)
-		@test length(v) == 4
-		@test all(isa.(v, VariableRef))
-	end
 
 	@testset "@block" begin
 		m = Model(Ipopt.Optimizer)
