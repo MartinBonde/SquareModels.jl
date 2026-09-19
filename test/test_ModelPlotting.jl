@@ -490,6 +490,8 @@ end
 		gapped = @evalexpr(s[:b,:])
 		@test length(gapped) == 2
 		@test !haskey(gapped, (2021,))
+		shares = @evalexpr(:i => db[d[:a,:]], db, s[:b,:])
+		@test shares[2020] == shares[2022] == 3.0
 		db[s[:a,:]] .= [6, 12, 18]
 		@test collect(@evalexpr(s[:a,:] / d[:a,:])) == [3, 6, 9]
 	finally
@@ -504,11 +506,13 @@ JuMP.@variables model begin
 	x
 	p[[:hh, :firm], 2020:2021]
 	q[[:hh, :firm], 2020:2021]
+	g[2020:2021]
 	L[[:cognitive, :physical], 2020:2021]
 end
 
 baseline = ModelDictionary(model)
 baseline[x] = 3
+baseline[g] = [10, 20]
 for h in [:hh, :firm], t in 2020:2021
 	baseline[p[h, t]] = h == :hh ? t - 2019 : 10 * (t - 2019)
 	baseline[q[h, t]] = h == :hh ? 2 : 3
@@ -522,6 +526,7 @@ end
 
 shock = ModelDictionary(model)
 shock[x] = 4
+shock[g] = [20, 20]
 for h in [:hh, :firm], t in 2020:2021
 	shock[p[h, t]] = 2 * baseline[p[h, t]]
 	shock[q[h, t]] = baseline[q[h, t]]
@@ -563,6 +568,16 @@ end
 	@test Array(@evalexpr(baseline, p)) == [1.0 2.0; 10.0 20.0]
 	@test occursin("2020", sprint(show, MIME"text/plain"(), @evalexpr(baseline, p)))
 	@test isequal(@evalexpr(:p, baseline, p[:hh, :]), [NaN, 100.0])
+	@test @evalexpr(:i, baseline, p[:hh, :]) == [100.0, 200.0]
+	@test @evalexpr(:i => 2021, baseline, p[:hh, :]) == [50.0, 100.0]
+	@test Array(@evalexpr(:i => 2020, baseline, p)) == [100.0 200.0; 100.0 200.0]
+	@test @evalexpr(:i => baseline[p[:firm, :]], baseline, p[:hh, :]) == [0.1, 0.1]
+	@test @evalexpr(:i => baseline[p[:firm, :]], 2021:2021, baseline, p[:hh, :]) == [0.1]
+	@test isequal(@evalexpr([:i => 2020, :p], baseline, p[:hh, :]), [NaN, 100.0])
+	@test @evalexpr([:i => baseline[p[:firm, :]], :an], baseline=>shock, p[:hh, :]) ==
+		[[0.2, 0.2], [0.1, 0.1]]
+	@test @evalexpr((:i => g, :m), baseline=>shock, p[:hh, :]) == [0.0, 0.1]
+	@test_throws ErrorException @evalexpr(:i => 2019, baseline, p[:hh, :])
 	@test @evalexpr(:m, baseline=>shock, p[:hh, :]) == [1.0, 2.0]
 	@test @evalexpr(:q, baseline=>shock, p[:hh, :]) == [100.0, 100.0]
 	@test isequal(map(Array, @evalexpr([:n, :p], baseline, p[:hh, :])), [[1, 2], [NaN, 100.0]])
@@ -615,6 +630,20 @@ end
 	@test series[1].op == :q
 	@test series[1].x == [2020, 2021]
 	@test series[1].y == [100.0, 100.0]
+	series = @plot (:i => 2021) baseline p[:hh, :]
+	@test only(series).x == [2020, 2021]
+	@test only(series).y == [50.0, 100.0]
+	@test only(series).op == :i
+	series = @plot (:i => baseline[p[:firm, :]]) baseline p[:hh, :]
+	@test only(series).y == [0.1, 0.1]
+	@test only(series).op == :n
+	series = @plot((:i => baseline[p[:firm, :]]), 2021:2021, baseline, p[:hh, :])
+	@test only(series).x == [2021]
+	@test only(series).y == [0.1]
+	series = @plot [:i => baseline[p[:firm, :]], :an] baseline=>shock p[:hh, :]
+	@test [s.y for s in series] == [[0.2, 0.2], [0.1, 0.1]]
+	series = @plot (:i => g, :m) baseline=>shock p[:hh, :]
+	@test only(series).y == [0.0, 0.1]
 	series = @plot :p baseline p
 	@test length(series) == 2
 	@test series[1].label == "p[hh]"
@@ -670,6 +699,7 @@ end
 
 	set_default_source!(baseline => shock)
 	@test @evalexpr(:q, p[:hh, :]) == [100.0, 100.0]
+	@test @evalexpr((:i => g, :m), p[:hh, :]) == [0.0, 0.1]
 
 	set_default_operator!(:q)
 	@test @evalexpr(p[:hh, :]) == [100.0, 100.0]

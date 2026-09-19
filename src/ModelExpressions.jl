@@ -213,7 +213,7 @@ function Tables.columns(r::MultiVarResult)
 end
 
 """
-    _GroupEntry(source_label, source, reference_label, reference)
+    _GroupEntry(source_label, source, reference_label, reference, ops)
 
 One database (or `reference => source` pair) contributed to a `@prt`/`@evalexpr`
 call whose `db` argument is a `Pair` or a `Tuple` of sources/pairs, e.g.
@@ -226,6 +226,7 @@ struct _GroupEntry
 	source::Any
 	reference_label::Union{String,Nothing}
 	reference::Any
+	ops::Any
 end
 
 """Push `(name, val)` onto `names`/`vals` unless `name` is already present (keeps a shared reference, e.g. a common baseline, from being repeated as a column)."""
@@ -255,12 +256,13 @@ function _group_result(ops, entries::Vector{_GroupEntry})
 	for e in entries
 		if needs
 			e.reference === nothing && error("operator requires a reference source for $(e.source_label); use `reference => source`")
-			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, () -> e.reference, e.source_label))
+			_push_unique!(names, vals, e.source_label, _apply_ops(e.ops, e.source, () -> e.reference, e.source_label))
 		elseif e.reference === nothing
-			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, nothing, e.source_label))
+			_push_unique!(names, vals, e.source_label, _apply_ops(e.ops, e.source, nothing, e.source_label))
 		else
-			_push_unique!(names, vals, e.reference_label, _apply_ops(ops, e.reference, nothing, e.reference_label))
-			_push_unique!(names, vals, e.source_label, _apply_ops(ops, e.source, nothing, e.source_label))
+			_push_unique!(names, vals, e.reference_label,
+				_apply_ops(_reference_ops(e.ops), e.reference, nothing, e.reference_label))
+			_push_unique!(names, vals, e.source_label, _apply_ops(e.ops, e.source, nothing, e.source_label))
 		end
 	end
 	needs && length(vals) == 1 && return only(vals)
@@ -362,6 +364,7 @@ _to_float(x) = (x === nothing || x === _NA) ? NaN : Float64(x)
 
 _as_numeric(x::Number) = Float64(x)
 _as_numeric(x) = [_to_float(v) for v in Array(x)]
+_as_numeric(x::Window) = _to_float.(collect(x))
 
 _stored_pairs(x::SparseAxisArray) = x.data
 _stored_pairs(x::SparseZeroArray) = _stored_pairs(x.data)
@@ -421,6 +424,51 @@ _gdif(x) = _dif(_pch(x))
 _log(x) = log.(_as_numeric(x))
 _ldif(x) = _dif(_log(x))
 
+function _rebase(x, period)
+	dims = _axis_labels(x)
+	dims === nothing && error("indexing requires a labeled time axis")
+	isempty(dims) && error("indexing requires a time dimension")
+	periods = collect(dims[end])
+	isempty(periods) && error("cannot index an empty time series")
+	base_period = ismissing(period) ? first(periods) : period
+	position = findfirst(isequal(base_period), periods)
+	position === nothing && error("index period $base_period is not in the time axis")
+	a = _as_numeric(x)
+	base = selectdim(a, ndims(a), position)
+	return _relabel(a ./ reshape(base, size(base)..., 1) .* 100, x)
+end
+
+function _aligned_denominator(x, denominator)
+	dims, denominator_dims = _axis_labels(x), _axis_labels(denominator)
+	(dims === nothing || denominator_dims === nothing || ndims(denominator) != 1) &&
+		return _as_numeric(denominator)
+	values = Dict(zip(denominator_dims[end], _as_numeric(denominator)))
+	return [values[period] for period in dims[end]]
+end
+
+_rebase(x, denominator::Union{AbstractArray,Window}) =
+	_relabel(_as_numeric(x) ./ _aligned_denominator(x, denominator), x)
+
+function _rebase(x::_SparseTableArray, period)
+	periods = _order_periods(unique(key[end] for key in keys(_stored_pairs(x))))
+	isempty(periods) && error("cannot index an empty time series")
+	base_period = ismissing(period) ? first(periods) : period
+	base_period in periods || error("index period $base_period is not in the time axis")
+	return _map_stored(x) do key, value
+		base_key = (Base.front(key)..., base_period)
+		_to_float(value) / _to_float(_stored_get(x, base_key, nothing)) * 100
+	end
+end
+function _rebase(x::_SparseTableArray, denominator::Union{AbstractArray,Window})
+	dims = _axis_labels(denominator)
+	dims === nothing && error("a series denominator requires a labeled time axis")
+	ndims(denominator) == 1 || error("a sparse source requires a one-dimensional denominator")
+	values = Dict(zip(dims[end], _as_numeric(denominator)))
+	return _map_stored((key, value) -> _to_float(value) / get(values, key[end], NaN), x)
+end
+_rebase(x::LabeledArray{T,N,A,D}, index) where {T,N,A<:_SparseTableArray,D} =
+	_relabel(_rebase(x.data, index), x)
+
 _dif(x::_SparseTableArray) = (a = _as_numeric(x); _zip_stored(-, a, _lag1(a)))
 _pch(x::_SparseTableArray) = (a = _as_numeric(x); _zip_stored((v, lag) -> (v / lag - 1) * 100, a, _lag1(a)))
 _gdif(x::_SparseTableArray) = _dif(_pch(x))
@@ -453,15 +501,38 @@ function _need_ref(op)
 	op in (:m, :q, :mp, :r, :rn, :rd, :rp, :rdp, :rl, :rdl)
 end
 
-function _normalize_ops(ops)
-	ops isa Symbol && return (ops,)
-	return Tuple(ops)
+_normalize_ops(ops) = ops isa Union{Pair,Symbol} ? (ops,) : Tuple(ops)
+
+_is_index_op(op) = op === :i || (op isa Pair && op.first === :i)
+
+struct _IndexValues
+	source
+	reference
+end
+
+_source_index(index) = index
+_source_index(index::_IndexValues) = index.source
+_reference_index(index) = index
+_reference_index(index::_IndexValues) = index.reference
+_reference_op(op) = op
+_reference_op(op::Pair) = op.first === :i && op.second isa _IndexValues ?
+	(:i => op.second.reference) : op
+_reference_ops(ops) = ops isa Union{Symbol,Pair} ? _reference_op(ops) : map(_reference_op, ops)
+
+function _index_spec(ops)
+	specs = filter(_is_index_op, _normalize_ops(ops))
+	length(specs) <= 1 || error("use only one indexing option")
+	isempty(specs) && return nothing
+	spec = only(specs)
+	return spec isa Pair ? spec.second : missing
 end
 
 function _expand_ops(ops)
 	out = Symbol[]
 	for op in _normalize_ops(ops)
-		if op == :a
+		if _is_index_op(op)
+			continue
+		elseif op == :a
 			append!(out, (:n, :p, :r, :rp))
 		elseif op == :an
 			append!(out, (:n, :r))
@@ -479,6 +550,7 @@ function _expand_ops(ops)
 			push!(out, op)
 		end
 	end
+	isempty(out) && push!(out, :n)
 	return Tuple(out)
 end
 
@@ -522,12 +594,17 @@ end
 
 function _apply_ops(ops, x, ref=nothing, name="")
 	os = _expand_ops(ops)
-	length(os) == 1 && return _transform(only(os), x, ref, name)
-	return Any[_transform(op, x, ref, name) for op in os]
+	index = _index_spec(ops)
+	source = index === nothing ? x : _rebase(x, _source_index(index))
+	reference = index === nothing || ref === nothing ? ref :
+		() -> _rebase(_ref_value(ref, :n), _reference_index(index))
+	length(os) == 1 && return _transform(only(os), source, reference, name)
+	return Any[_transform(op, source, reference, name) for op in os]
 end
 
 """Default y-axis label for an operator, e.g. `:m => "Difference from baseline"`. `nothing` when the operator doesn't imply a particular unit (e.g. `:n`)."""
 const _OP_AXIS_LABELS = Dict(
+	:i => "Index (base = 100)",
 	:d => "Difference",
 	:dif => "Difference",
 	:p => "Percent change",
@@ -783,11 +860,26 @@ function _value_arg(expr, dbv, refv, periodv, ops, apply_ref)
 	end
 	ref = _ref_expr(expr, refv, periodv)
 	expr_name = _expr_label(expr)
-	return :($apply_ref($ops, $(_value_expr(expr, dbv, periodv)), $ref, $expr_name))
+	return :($apply_ref($(_ops_expr(ops, dbv, refv, periodv)), $(_value_expr(expr, dbv, periodv)), $ref, $expr_name))
+end
+
+_is_index_expr(x) = isexpr(x, :call) && length(x.args) == 3 && x.args[1] === :(=>) &&
+	x.args[2] isa QuoteNode && x.args[2].value === :i
+_is_ops_expr(x) = isexpr(x, :vect) || isexpr(x, :tuple)
+
+function _ops_expr(ops, dbv, refv, periodv)
+	if _is_index_expr(ops) && ops.args[3] isa Symbol
+		source = _value_expr(ops.args[3], dbv, periodv)
+		reference = refv === nothing ? nothing : _value_expr(ops.args[3], refv, periodv)
+		return :(:i => $(GlobalRef(@__MODULE__, :_IndexValues))($source, $reference))
+	elseif _is_ops_expr(ops)
+		return Expr(ops.head, Any[_ops_expr(op, dbv, refv, periodv) for op in ops.args]...)
+	end
+	return ops
 end
 
 _is_op_literal(x::QuoteNode) = x.value isa Symbol
-_is_op_literal(x::Expr) = isexpr(x, :vect) && all(_is_op_literal, x.args)
+_is_op_literal(x::Expr) = (_is_ops_expr(x) && all(_is_op_literal, x.args)) || _is_index_expr(x)
 _is_op_literal(_) = false
 
 _is_period_literal(x::Number) = true
@@ -816,14 +908,14 @@ function _db_parts(db, ref)
 end
 
 """
-    _group_entry_expr(el, expr, periodv)
+    _group_entry_expr(el, expr, ops, periodv)
 
 Build the `(bindings, entry)` pair for one element `el` of a `db` group (either
 a plain source expression or a `reference => source` pair): `bindings` are
 `let`-bindings for the gensym'd database variable(s), and `entry` constructs
 the corresponding [`_GroupEntry`](@ref) evaluating `expr` against them.
 """
-function _group_entry_expr(el, expr, periodv)
+function _group_entry_expr(el, expr, ops, periodv)
 	entry_ref = GlobalRef(@__MODULE__, :_GroupEntry)
 	dbv = gensym(:db)
 	if _is_pair_expr(el)
@@ -832,11 +924,13 @@ function _group_entry_expr(el, expr, periodv)
 		bindings = [:($(esc(dbv)) = $(esc(srcexpr))), :($(esc(refv)) = $(esc(refexpr)))]
 		src_label = _table_label(string(srcexpr), expr)
 		ref_label = _table_label(string(refexpr), expr)
-		entry = esc(:($entry_ref($src_label, $(_value_expr(expr, dbv, periodv)), $ref_label, $(_value_expr(expr, refv, periodv)))))
+		entry = esc(:($entry_ref($src_label, $(_value_expr(expr, dbv, periodv)), $ref_label,
+			$(_value_expr(expr, refv, periodv)), $(_ops_expr(ops, dbv, refv, periodv)))))
 	else
 		bindings = [:($(esc(dbv)) = $(esc(el)))]
 		src_label = _table_label(string(el), expr)
-		entry = esc(:($entry_ref($src_label, $(_value_expr(expr, dbv, periodv)), nothing, nothing)))
+		entry = esc(:($entry_ref($src_label, $(_value_expr(expr, dbv, periodv)), nothing, nothing,
+			$(_ops_expr(ops, dbv, nothing, periodv)))))
 	end
 	return bindings, entry
 end
@@ -846,7 +940,7 @@ function _group_macro(dbargs, expr, ops, period_arg, periodv)
 	bindings = Any[]
 	entries = Any[]
 	for el in dbargs
-		bs, entry = _group_entry_expr(el, expr, periodv)
+		bs, entry = _group_entry_expr(el, expr, ops, periodv)
 		append!(bindings, bs)
 		push!(entries, entry)
 	end
@@ -879,7 +973,8 @@ function _eval_macro(args)
 			string(getproperty($specv, :source_label), '\n', $expr_label),
 			$(esc(_value_expr(expr, dbv, periodv))),
 			string(getproperty($specv, :reference_label), '\n', $expr_label),
-			$(esc(_value_expr(expr, refv, periodv)))))
+			$(esc(_value_expr(expr, refv, periodv))),
+			$(esc(_ops_expr(ops, dbv, refv, periodv)))))
 		return quote
 			let $specsv = $default_specs_ref(), $(esc(periodv)) = $period_arg
 				if length($specsv) == 1
@@ -935,6 +1030,14 @@ reference) or a `Tuple` of sources/pairs instead evaluate `expr` against each
 database and return a [`MultiVarResult`](@ref) with one column per database
 (a reference shared by several pairs, e.g. a common baseline, is only shown
 once).
+
+Use `:i` to rebase each series to 100 in the first shown period. Use
+`:i => year` for a chosen period, or `:i => series` to show values as a ratio to
+that series. A bare denominator variable is read from each source, so
+`(:i => qGDP, :m)` gives the difference in the GDP share. Indexing runs before
+other operators:
+`@evalexpr([:i => 2020, :p], db, x)` returns the growth rate of the indexed
+series.
 """
 macro evalexpr(args...)
 	return _eval_macro(args)
@@ -953,6 +1056,7 @@ Evaluate a model expression, print it to `stdout`, and return `nothing`.
 This also prints from scripts and functions. Use [`@evalexpr`](@ref) to retain
 the result for further work or table export. To print a result that you already
 evaluated, use `@prt \$result` with a default source and the level operator `:n`.
+Use `:i`, `:i => year`, or `:i => series` to index the result.
 """
 macro prt(args...)
 	return :($(GlobalRef(@__MODULE__, :_print_result))($(_eval_macro(args))))

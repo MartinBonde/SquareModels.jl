@@ -30,7 +30,7 @@ import ..AbstractSeries   # shared supertype with `Window` (defined in the paren
 import ..Window
 import .._SparseTableArray, .._table_layout
 using ..ModelExpressions: LabeledArray
-using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _default_periods, _expand_dot_macro, _expand_ops, _macro_parts, _need_ref, _op_axis_label, _ref_expr, _ref_value, _rewrite, _transform, _value_expr
+using ..ModelExpressions: _active_specs, _collect_bases, _db_parts, _default_periods, _expand_dot_macro, _expand_ops, _index_spec, _macro_parts, _need_ref, _op_axis_label, _ops_expr, _rebase, _reference_index, _ref_expr, _ref_value, _rewrite, _source_index, _transform, _value_expr
 
 export @plot, plotvar, plotseries, plotseries!, labeled, LabeledSeries, alternating_dash!
 export set_plot_finalize!, reset_plot_finalize!, plot_finalize
@@ -245,6 +245,19 @@ end
 
 _period_match(x, periods) = periods isa Union{AbstractArray,Tuple,AbstractRange} ? x in periods : x == periods
 
+function _index_line(s::LabeledSeries, index)
+	index === nothing && return s
+	values = _rebase(LabeledArray(s.y, (s.x,)), index)
+	return LabeledSeries(s.x, values, s.label, s.op, s.panel)
+end
+
+_indexed_lines(lines, index) = _index_line.(lines, Ref(index))
+_indexed_lines(::Nothing, index) = nothing
+
+# A period base gives a 100-based index. A series denominator gives a plain
+# ratio, which carries no unit of its own.
+_index_display_op(index) = _source_index(index) isa Union{AbstractArray,AbstractSeries} ? :n : :i
+
 # Label each series with the source text the user wrote (with any `@.` expanded).
 _label_text(ex) = string(_expand_dot_macro(ex))
 
@@ -259,33 +272,17 @@ function _line_transform(op, s, ref, reflines, i)
 	return _transform(op, s.y, reflines === nothing ? ref : reflines[i].y)
 end
 
-function _op_lines(ops, x::AbstractSeries, ref, label, xfrom, periods)
+function _op_lines(ops, x::Union{AbstractSeries,AbstractArray}, ref, label, xfrom, periods)
 	out = LabeledSeries[]
+	index = _index_spec(ops)
+	xlines = _indexed_lines(_lines(x, label, xfrom), _source_index(index))
 	for op in _expand_ops(ops)
-		xlines = expand(x)
-		reflines = _need_ref(op) ? _ref_lines(ref, op) : nothing
+		reflines = _need_ref(op) ?
+			_indexed_lines(_lines(_ref_value(ref, op), label, xfrom), _reference_index(index)) : nothing
 		for (i, s) in enumerate(xlines)
 			line_label = length(xlines) == 1 ? label : s.label
-			push!(out, _filter_periods(LabeledSeries(s.x, _line_transform(op, s, ref, reflines, i), line_label, op,
-				(label, s.panel[2])), periods))
-		end
-	end
-	return out
-end
-
-function _ref_lines(ref, op)
-	r = _ref_value(ref, op)
-	return r isa AbstractSeries ? expand(r) : nothing
-end
-
-function _op_lines(ops, x::AbstractArray, ref, label, xfrom, periods)
-	out = LabeledSeries[]
-	for op in _expand_ops(ops)
-		xlines = _lines(x, label, xfrom)
-		reflines = _need_ref(op) ? _lines(_ref_value(ref, op), label, xfrom) : nothing
-		for (i, s) in enumerate(xlines)
-			line_label = length(xlines) == 1 ? label : s.label
-			push!(out, _filter_periods(LabeledSeries(s.x, _line_transform(op, s, ref, reflines, i), line_label, op,
+			display_op = index === nothing || op != :n ? op : _index_display_op(index)
+			push!(out, _filter_periods(LabeledSeries(s.x, _line_transform(op, s, ref, reflines, i), line_label, display_op,
 				(label, s.panel[2])), periods))
 		end
 	end
@@ -295,6 +292,7 @@ end
 _with_op(s::LabeledSeries, op) = LabeledSeries(s.x, s.y, s.label, op, s.panel)
 
 function _op_lines(ops, x, ref, label, xfrom, periods)
+	_index_spec(ops) === nothing || error("indexing requires a time series")
 	out = LabeledSeries[]
 	for op in _expand_ops(ops)
 		lines = _with_op.(_lines(_transform(op, x, ref), label, xfrom), op)
@@ -320,7 +318,8 @@ _series_expr(item, dbv, refv, periodv, ops, oplines_ref) = begin
 	bases = _collect_bases(item)
 	cands = Expr(:tuple, Any[_rewrite(b, dbv) for b in bases]...)
 	ref = _ref_expr(item, refv, periodv)
-	:($oplines_ref($ops, $(_value_expr(item, dbv, periodv)), $ref, $(_label_text(item)), $cands, $periodv))
+	:($oplines_ref($(_ops_expr(ops, dbv, refv, periodv)), $(_value_expr(item, dbv, periodv)),
+		$ref, $(_label_text(item)), $cands, $periodv))
 end
 
 function _series_arg(expr, dbv, refv, periodv, ops, oplines_ref)
@@ -349,6 +348,10 @@ ModelDictionary `db` and labelling each series with its source text.
 @plot db qGDP / qGDP[2019]          # normalised, label "qGDP / qGDP[2019]"
 @plot db [qGDP * pGDP, qGDP / qGDP[2019]]   # multiple series on one axis
 @plot db y                          # multi-dim y[region, year] → one line per region
+@plot (:i => 2020) db qGDP          # index to 100 in 2020
+@plot (:i => qGDP, :m) baseline=>shock qI  # change in GDP share
+@plot (:i => baseline[qGDP]) db qI   # ratio to baseline GDP
+@plot [:i => 2020, :p] db qGDP      # index first, then plot growth
 ```
 
 A multi-dimensional variable fans out into one line per leading-index combination

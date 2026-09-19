@@ -99,6 +99,8 @@ write explicit dots for elementwise functions and explicit generators for sums:
 ```julia
 @plot data log.(qGDP)
 @plot data sum(qX[s, :] for s in sectors)
+@plot (:i => 2020) data qGDP                 # index to 100 in 2020
+@plot (:i => data[qGDP]) data qC             # consumption as a ratio to GDP
 ```
 
 For programmatic workflows, build series explicitly with [`labeled`](@ref) and
@@ -123,13 +125,15 @@ round.(normalised_gdp, digits=3)
 [`@prt`](@ref) prints values and transformations to `stdout` and returns `nothing`.
 It prints from the REPL, scripts, and functions. Use `@evalexpr` when you need the
 result for further work or export. An
-optional operator symbol selects the transformation, e.g. `:p` for percent
-growth and `:q` for percent deviation from a reference:
+optional operator selects the transformation, e.g. `:p` for percent
+growth, `:q` for percent deviation from a reference, and `:i` to rebase a series
+to 100:
 
 ```julia
 @prt data qGDP
 @prt :p data qGDP[2020:2060]
 @prt :q baseline=>scenario qGDP[2020:2060]
+@prt (:i => 2020) data qGDP
 @prt 2020:2060 qGDP                         # default source, selected periods
 ```
 
@@ -171,7 +175,7 @@ report = MultiVarResult(["GDP", "Real wage"], report.values)
 
 Operators transform the expression result along its final dimension. In the
 definitions below, ``x_t`` is the source value, ``b_t`` is the reference value,
-and ``\Delta x_t = x_t - x_{t-1}``.
+``d_t`` is an index denominator, and ``\Delta x_t = x_t - x_{t-1}``.
 
 Sparse operators transform stored cells only; gaps remain unstored and print as
 blank cells. Lag operators use the prior displayed period for the same leading
@@ -185,6 +189,34 @@ Source transformations:
 - `:dp`, `:gdif` — change in the percent growth rate.
 - `:l` — natural logarithm, ``\log(x_t)``.
 - `:dl` — log difference, ``\log(x_t)-\log(x_{t-1})``.
+
+Indexing runs before other operators. Use it alone or in a vector such as
+`[:i => 2020, :p]`. A missing base period throws. Sparse sources keep unstored
+cells unstored.
+
+- `:i` — rebase each series so the first shown period is 100.
+- `:i => year` — rebase each series so that period is 100.
+- `:i => series` — show values as a ratio to that series, ``x_t/d_t``.
+
+`:i` and `:i => year` index each path on itself. Source and reference are then
+both 100 in the base period. A series denominator keeps the plain ratio, so
+follow it with `:m` for the change in the ratio, or with `:p` or `:mp` for
+percent changes. A bare model variable used as the denominator is read from
+each path. Thus, `(:i => qGDP, :m)` gives the change in the GDP share. An
+explicit series uses one common denominator for all paths. SquareModels selects
+the denominator periods that match the expression, so the denominator does not
+need an explicit period slice:
+
+```julia
+@plot (:i => 2020) data qGDP
+@plot (:i => qGDP, :m) baseline=>scenario qI
+@plot (:i => baseline[qGDP]) baseline=>scenario qI
+@plot [:i => baseline[qGDP], :an] qI
+@evalexpr([:i => 2020, :p], data, qGDP)
+```
+
+The plot y-axis label is "Index (base = 100)" for a period index. A series
+denominator has no unit of its own and keeps the default label.
 
 Comparisons with a reference:
 
@@ -217,8 +249,9 @@ The following bundle operators return several transformations together:
 - `:adl` → `[:dl, :rdl]`
 
 Pass an explicit operator vector to request another combination, for example
-`@prt [:n, :p] data qGDP`. The reference operators, comparison operators, and
-all bundle operators require a `reference => source` pair.
+`@prt [:n, :p] data qGDP` or `@prt [:i => 2020, :an] baseline=>scenario qGDP`.
+The reference operators, comparison operators, and all bundle operators require
+a `reference => source` pair. Indexing does not.
 
 A `reference => source` pair supplies the reference for operators that need one,
 like `:q` above. Without such an operator (or with a `Tuple` of sources/pairs),
