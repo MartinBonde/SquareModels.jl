@@ -269,6 +269,11 @@ end
 	@test all(ax -> (range = yrange(ax.finallimits[]); 0 < range[1] <= 1.0 && range[2] >= 100.0), axes)
 end
 
+# Makie 0.24.15 converts :solid to the one-stop pattern Float32[0.0]. Earlier versions gave nothing,
+# which a line also reports when no linestyle was set.
+is_solid(linestyle) = linestyle === nothing || length(linestyle) == 1
+is_dashed(linestyle) = linestyle isa AbstractVector && length(linestyle) > 1
+
 @testset "alternating_dash for repeated variables" begin
 	# Same base label twice (e.g. same variable from two sources): same color, different dash.
 	series = [labeled([1.0, 2.0], "qGDP"), SquareModels.LabeledSeries([1.0, 2.0], [2.0, 3.0], "qGDP", :r), labeled([3.0, 4.0], "qC")]
@@ -276,9 +281,9 @@ end
 	plots = [p for p in fig.content[1].scene.plots if p isa Makie.Lines]
 	@test plots[1].color[] == plots[2].color[]
 	@test plots[1].color[] != plots[3].color[]
-	@test plots[1].linestyle[] === nothing        # :solid
-	@test plots[2].linestyle[] isa AbstractVector # dashed
-	@test plots[3].linestyle[] === nothing
+	@test is_solid(plots[1].linestyle[])
+	@test is_dashed(plots[2].linestyle[])
+	@test is_solid(plots[3].linestyle[])
 
 	# Unique labels: no restyling unless forced.
 	series = [labeled([1.0, 2.0], "a"), labeled([2.0, 3.0], "b")]
@@ -289,7 +294,7 @@ end
 	fig = plotseries(series; legend=false, alternating_dash=true)  # forced: consecutive pairs
 	plots = [p for p in fig.content[1].scene.plots if p isa Makie.Lines]
 	@test plots[1].color[] == plots[2].color[]
-	@test plots[2].linestyle[] isa AbstractVector
+	@test is_dashed(plots[2].linestyle[])
 end
 
 @testset "Plot macro options and cached year axes" begin
@@ -418,12 +423,12 @@ end
 		@test existing.color[] == old_color
 		@test existing.linestyle[] == old_style
 		@test lines[1].color[] == lines[2].color[]
-		@test lines[1].linestyle[] === nothing
-		@test lines[2].linestyle[] isa AbstractVector
+		@test is_solid(lines[1].linestyle[])
+		@test is_dashed(lines[2].linestyle[])
 		styled = plotseries!(ax, series; styles=[(color=:red,), (linestyle=:solid,)])
 		@test styled[1].color[] == Makie.to_color(:red)
-		@test styled[2].linestyle[] === nothing
-		@test lines[2].linestyle[] isa AbstractVector
+		@test is_solid(styled[2].linestyle[])
+		@test is_dashed(lines[2].linestyle[])
 	end
 end
 
