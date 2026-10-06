@@ -144,12 +144,14 @@ Other backends fall back to checking the live variable count. Missing-name
 lookups in a synchronized standard model do not scan its variables.
 
 Refreshing invalidates prepared selections and lets datasets synchronize their
-values by variable identity when next accessed. Finish a group of model changes
+values by variable identity when next accessed. It also drops the cached map
+from each variable to its registered container. Finish a group of model changes
 before refreshing, rather than refreshing after every individual variable.
 After `empty!(model)`, create new datasets and selections: JuMP may reuse old
 variable identities, so data from the emptied model cannot be synchronized.
 """
 function refresh_model_layout!(model::AbstractModel)
+    _drop_variable_locations!(model)
     return _model_layout(model; refresh=true)
 end
 
