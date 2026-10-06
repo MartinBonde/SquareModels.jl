@@ -705,30 +705,52 @@ function _object_name(model, object)
 	return nothing
 end
 
-_key_of(object::SparseZeroArray, var) = _key_of(object.data, var)
-function _key_of(object::SparseAxisArray, var)
-	for (key, item) in object.data
-		item === var && return key
-	end
+# Map each registered variable to `(name, container, key)`. `add_equation!` looks
+# this up once per cell, so one pass replaces a scan of every container.
+# A miss rebuilds the map and picks up variables registered later. Adding
+# variables leaves existing entries valid. Deleting, renaming, or replacing a
+# container needs `refresh_model_layout!`.
+struct VariableLocations
+	locations::Dict{VariableRef,Tuple{Symbol,Any,Any}}
+end
+
+const _VARIABLE_LOCATIONS_KEY = :SquareModels_variable_locations
+
+_variable_locations(model::AbstractModel) = get(model.ext, _VARIABLE_LOCATIONS_KEY, nothing)
+
+function _drop_variable_locations!(model::AbstractModel)
+	delete!(model.ext, _VARIABLE_LOCATIONS_KEY)
 	return nothing
 end
-function _key_of(object::AbstractArray, var)
-	for key in _all_keys(object)
-		object[key...] === var && return key
+
+# A copied model must not keep VariableRefs from the original. The first lookup
+# builds a map for the copy. `empty!` clears `ext`, so it drops the map as well.
+JuMP.copy_extension_data(::VariableLocations, ::AbstractModel, ::AbstractModel) = nothing
+
+_add_location!(locations, var::VariableRef, location) = get!(locations, var, location)
+_add_location!(_, _, _) = nothing
+
+_add_locations!(locations, name, object::VariableRef) = _add_location!(locations, object, (name, object, nothing))
+_add_locations!(locations, name, object::AbstractArray) =
+	foreach(key -> _add_location!(locations, object[key...], (name, object, key)), _all_keys(object))
+_add_locations!(_, _, _) = nothing
+
+function _rebuild_variable_locations!(model::AbstractModel)
+	locations = Dict{VariableRef,Tuple{Symbol,Any,Any}}()
+	for (name, object) in object_dictionary(model)
+		endswith(string(name), RESIDUAL_SUFFIX) && continue
+		_add_locations!(locations, name, object)
 	end
-	return nothing
+	return model.ext[_VARIABLE_LOCATIONS_KEY] = VariableLocations(locations)
 end
-_key_of(_, _) = nothing
 
 """Return `(name, container, key)` for a variable attached to `model`."""
 function _variable_location(model, var::VariableRef)
-	for (name, object) in object_dictionary(model)
-		endswith(string(name), RESIDUAL_SUFFIX) && continue
-		object === var && return name, object, nothing
-		key = _key_of(object, var)
-		key === nothing || return name, object, key
-	end
-	error("Cannot find residual for an unattached variable")
+	cached = _variable_locations(model)
+	location = isnothing(cached) ? nothing : get(cached.locations, var, nothing)
+	isnothing(location) && (location = get(_rebuild_variable_locations!(model).locations, var, nothing))
+	isnothing(location) && error("Cannot find residual for an unattached variable")
+	return location
 end
 
 """Create the residual container for `endo` when needed and return its matching item."""

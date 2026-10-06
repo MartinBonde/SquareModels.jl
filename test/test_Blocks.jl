@@ -87,6 +87,63 @@ end
 	end
 end
 
+@testset "Cached variable locations" begin
+	m = Model()
+	JuMP.@variable(m, x)
+	JuMP.@variable(m, y[i = [:a, :b], t = 1:2])
+	JuMP.@variable(m, s[i = 1:2, j = 1:2; i <= j])
+	SquareModels.@variables m begin
+		sz[i = 1:2, j = 1:2; i <= j]
+	end
+	@test sz isa SparseZeroArray
+
+	@test SquareModels._variable_location(m, x) == (:x, x, nothing)
+	for (var, container, varname) in ((y[:b, 2], y, :y), (s[1, 2], s, :s), (sz[1, 2], sz, :sz))
+		name, found, key = SquareModels._variable_location(m, var)
+		@test name == varname
+		@test found === container
+		@test found[key...] === var
+	end
+	locations = SquareModels._variable_locations(m).locations
+
+	block = Block(m)
+	add_equation!(block, y[:a, 1], y[:a, 1], 0)
+	add_equation!(block, y[:b, 2], y[:b, 2], 0)
+	@test SquareModels._variable_locations(m).locations === locations
+	@test m[:y_J][:b, 2] in residuals(block)
+
+	JuMP.@variable(m, z)
+	@test SquareModels._variable_location(m, x) == (:x, x, nothing)
+	@test SquareModels._variable_locations(m).locations === locations
+	add_equation!(Block(m), z, z, 1)
+	@test SquareModels._variable_location(m, z) == (:z, z, nothing)
+	@test SquareModels._variable_locations(m).locations !== locations
+	@test haskey(m, :z_J)
+
+	refresh_model_layout!(m)
+	@test SquareModels._variable_locations(m) === nothing
+	@test residual(y[:a, 1]) === m[:y_J]
+
+	loose = VariableRef(m)
+	@test_throws ErrorException SquareModels._variable_location(m, loose)
+
+	empty!(m)
+	@test SquareModels._variable_locations(m) === nothing
+
+	source = Model()
+	JuMP.@variable(source, a)
+	JuMP.@variable(source, b[i = [:a, :b], t = 1:2])
+	add_equation!(Block(source), a, a, 1)
+	add_equation!(Block(source), b[:a, 1], b[:a, 1], 0)
+	copied, references = JuMP.copy_model(source)
+	@test SquareModels._variable_locations(copied) === nothing
+	name, found, key = SquareModels._variable_location(copied, references[b[:b, 2]])
+	@test name == :b
+	@test found === copied[:b]
+	@test JuMP.owner_model(found[key...]) === copied
+	@test residual(references[a]) === copied[:a_J]
+end
+
 @testset "@block works without importing JuMP" begin
 	NoJuMPImportBlockTest.run(Model())
 end
