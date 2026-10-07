@@ -391,7 +391,8 @@ Use `labeled(values, name)` or `LabeledSeries(years, values, name)` to supply da
 `labeled` keeps the stored axis of a `Window` or `LabeledArray` that contains one
 line. Plain arrays use `1:length(values)` unless `xfrom` supplies a matching axis.
 Use `LabeledSeries` to supply an explicit axis; its length must match the values.
-Both functions convert `nothing` and `missing` values to `NaN` gaps.
+Both functions convert `nothing` and `missing` values to `NaN` gaps. An infinite
+value throws an error, also when an operator creates it, such as `:p` after a zero.
 
 ### Alternating dash for repeated variables
 
