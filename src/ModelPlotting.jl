@@ -119,7 +119,7 @@ Unlike a `Window` (a view onto model data), it holds eager, computed values; bot
 share the [`AbstractSeries`](@ref) supertype.
 
 `x` and `y` must have the same length. Values of `nothing` and `missing` in `y`
-become `NaN`, which Makie draws as gaps.
+become `NaN`, which Makie draws as gaps. Infinite values throw an error.
 
 `op` records the print/plot operator (e.g. `:m`, `:q`) that produced `y`, used to
 pick a default y-axis label (see `_op_axis_label`) without cluttering the legend
@@ -133,7 +133,9 @@ struct LabeledSeries <: AbstractSeries
 	panel::Tuple{String,Tuple}
 	function LabeledSeries(x, y, label, op, panel)
 		@assert length(x) == length(y) "Series '$label' needs one value for each x coordinate."
-		return new(collect(x), Float64[_to_float(value) for value in y], label, op, panel)
+		values = Float64[_to_float(value) for value in y]
+		@assert !any(isinf, values) "Series '$label' has an infinite value; use nothing or missing for gaps."
+		return new(collect(x), values, label, op, panel)
 	end
 end
 LabeledSeries(x, y, label, op=:n) = LabeledSeries(x, y, label, op, (label, ()))

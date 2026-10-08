@@ -31,7 +31,9 @@ end
 	@test_throws AssertionError LabeledSeries([2020], [1, 2], "Mismatch")
 	@test_throws AssertionError LabeledSeries([2020], [1, 2], "Mismatch", :q)
 	@test_throws AssertionError LabeledSeries([2020], [1, 2], "Mismatch", :q, ("Group", (:a,)))
-	@test isequal(LabeledSeries([1, 2], [NaN, Inf], "Numeric").y, [NaN, Inf])
+	@test isequal(LabeledSeries([1, 2], [NaN, 1.0], "Numeric").y, [NaN, 1.0])
+	@test_throws AssertionError LabeledSeries([1, 2], [1.0, Inf], "Infinite")
+	@test_throws AssertionError LabeledSeries([1, 2], [-Inf, 1.0], "Infinite", :q, ("Group", ()))
 
 	cached = LabeledArray(values, (years,))
 	set_default_periods!(2030:2033)
@@ -113,9 +115,11 @@ end
 	@test !no_data(only(panel_axes(plotseries([gap, live]; legend=false))))
 	# Validation callbacks must still reject bad data on an all-gap panel.
 	@test_throws AssertionError plotseries(gap; decorate=(ax, lines) -> @assert all(s -> all(isfinite, s.y), lines))
-	invalid = plotseries(LabeledSeries([1], [Inf], "Invalid"); legend=false)
-	@test !no_data(only(panel_axes(invalid)))
-
+	m = Model()
+	JuMP.@variable(m, level[2020:2021])
+	db = ModelDictionary(m)
+	db[level] = [0.0, 1.0]
+	@test_throws AssertionError @plot :p db level
 	ax = Makie.Axis(Makie.Figure()[1, 1])
 	@test isempty(plotseries!(ax, LabeledSeries[]))
 	@test length(plotseries!(ax, gap)) == 1
