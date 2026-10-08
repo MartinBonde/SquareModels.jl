@@ -232,6 +232,40 @@ end
     result = ∑(sz[i, 3] for i in 1:5)
     # Only i=1 and i=2 exist, the rest are Zero()
     @test result isa AffExpr
+    @test JuMP.isequal_canonical(result, x[1, 3] + x[2, 3])
+    @test ∑(sz[i, 3] for i in 3:5) === SquareModels.Zero()
+    @test ∑(sz[i, 3] for i in Int[]) === SquareModels.Zero()
+end
+
+@testset "∑ term types and first-term ownership" begin
+    m = Model()
+    @variable(m, y[1:3])
+    @test ∑(i for i in 1:4) == 10
+    @test ∑(x for x in (1.5, SquareModels.Zero(), 2.5)) == 4.0
+    @test ∑(y[i] for i in 1:1) === y[1]
+    @test JuMP.isequal_canonical(∑(y[i] for i in 1:3), y[1] + y[2] + y[3])
+    @test JuMP.isequal_canonical(∑(x for x in (1.0, y[1], y[2])), 1.0 + y[1] + y[2])
+
+    aff = 2.0 * y[1] + 1.0
+    quad = y[2] * y[3]
+    terms = (aff, quad, 3.0 * y[3])
+    @test JuMP.isequal_canonical(∑(terms), 2.0 * y[1] + y[2] * y[3] + 3.0 * y[3] + 1.0)
+    @test JuMP.isequal_canonical(aff, 2.0 * y[1] + 1.0)
+    @test JuMP.isequal_canonical(quad, y[2] * y[3])
+    @test JuMP.isequal_canonical(∑((quad, aff)), y[2] * y[3] + 2.0 * y[1] + 1.0)
+    @test JuMP.isequal_canonical(quad, y[2] * y[3])
+
+    nl = sin(y[1]) + y[2]
+    nl_args = copy(nl.args)
+    c = cos(y[2])
+    result = ∑((nl, c, 2.0))
+    @test result.head === :+ && length(result.args) == 3
+    @test result.args[1] === nl && result.args[2] === c && result.args[3] == 2.0
+    @test nl.args == nl_args
+    mixed = ∑((aff, nl, c))
+    @test mixed.head === :+ && length(mixed.args) == 3 && mixed.args[2] === nl && mixed.args[3] === c
+    @test JuMP.isequal_canonical(mixed.args[1], aff)
+    @test JuMP.isequal_canonical(aff, 2.0 * y[1] + 1.0)
 end
 
 @testset "copy_variable for SparseZeroArray" begin
