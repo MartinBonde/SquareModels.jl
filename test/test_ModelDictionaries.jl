@@ -855,6 +855,51 @@ end
 	# Complex indices
 	@test parse_variable_name("N[tot,2025]") == ("N", "tot,2025")
 	@test parse_variable_name("emissions[energy,dk,2025,coal]") == ("emissions", "energy,dk,2025,coal")
+
+	# The base and the index string each need one character.
+	@test parse_variable_name("") == ("", "")
+	@test parse_variable_name("x[]") == ("x[]", "")
+	@test parse_variable_name("[a]") == ("[a]", "")
+	@test parse_variable_name("[[1]]") == ("[", "1]")
+	@test parse_variable_name("a[b][c]") == ("a", "b][c")
+	@test parse_variable_name("x[1]y") == ("x[1]y", "")
+end
+
+@testset "Test unload and load with sparse containers" begin
+	mktempdir() do tmpdir
+		model = Model()
+		stored = [(1, :a), (2, :b), (3, :a)]
+		@variable(model, s[i = 1:3, j = [:a, :b]; (i, j) in stored])
+		@variable(model, k[[:a, :b], 2025:2026])
+		@variable(model, w)
+		@variable(model, unset[1:2])
+
+		d = ModelDictionary(model)
+		d[s[1, :a]] = 1.0
+		d[s[3, :a]] = 3.0
+		d[k] = [10.0 20.0; 30.0 40.0]
+		d[k[:b, 2026]] = nothing
+		d[w] = -0.0
+
+		path = joinpath(tmpdir, "sparse.parquet")
+		unload(path, d)
+		rows = DataFrame(Parquet2.Dataset(IOBuffer(read(path))))
+		@test names(rows) == ["variable", "indices", "value"]
+		@test eltype(rows.variable) == String
+		@test Set(zip(rows.variable, rows.indices)) ==
+			Set([("s", "1,a"), ("s", "3,a"), ("k", "a,2025"), ("k", "b,2025"), ("k", "a,2026"), ("w", "")])
+
+		loaded = load(path, model)
+		@test isequal(collect(loaded), collect(d))
+		@test keys_match(loaded, d)
+		@test assert_no_diff(loaded, d; atol=0.0)
+
+		empty_path = joinpath(tmpdir, "empty.parquet")
+		unload(empty_path, ModelDictionary(model))
+		empty_rows = DataFrame(Parquet2.Dataset(IOBuffer(read(empty_path))))
+		@test isempty(empty_rows)
+		@test all(isnothing, collect(load(empty_path, model)))
+	end
 end
 
 @testset "Test unload skips nothing values" begin
@@ -1375,6 +1420,57 @@ end
 	@test occursin('┌', difference_output)
 end
 
+@testset "assert_no_diff reports differing names" begin
+	model = Model()
+	@variable(model, x[1:4])
+	@variable(model, s[i = 1:2, j = [:a, :b]; (i, j) in [(1, :a), (2, :b)]])
+	a = ModelDictionary(model, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+	b = copy(a)
+	b[x[2]] = 2.5
+	b[x[4]] = 0.0
+	b[s[2, :b]] = 6.0 + 1e-9
+	difference_error = try
+		assert_no_diff(a, b; atol=1e-6, rtol=0.1)
+	catch error
+		error
+	end
+	@test difference_error isa ToleranceError
+	@test difference_error.violations == [("x[4]", 4.0, Inf, 4.0, 0.0), ("x[2]", 0.5, 0.2, 2.0, 2.5)]
+
+	# Equal differences keep dictionary order.
+	b[x[2]] = 2.0
+	b[x[3]] = 7.0
+	b[x[1]] = -3.0
+	tied = try
+		assert_no_diff(a, b)
+	catch error
+		error
+	end
+	@test first.(tied.violations) == ["x[1]", "x[3]", "x[4]"]
+
+	# Datasets for different models compare by name and position.
+	other_model = Model()
+	@variable(other_model, [1:4], base_name = "x")
+	@variable(other_model, [i = 1:2, j = [:a, :b]; (i, j) in [(1, :a), (2, :b)]], base_name = "s")
+	@test assert_no_diff(a, ModelDictionary(other_model, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]))
+
+	b = copy(a)
+	b[x[3]] = nothing
+	b[s[1, :a]] = nothing
+	mismatch = try
+		assert_no_diff(a, b; msg="Check")
+	catch error
+		error
+	end
+	@test mismatch isa ErrorException
+	@test mismatch.msg == "Check\nCannot compare: 2 keys have nothing/value mismatch: [\"x[3]\", \"s[1,a]\"]"
+	@test !keys_match(a, b)
+
+	subset = a[a .> 2]
+	@test assert_no_diff(subset, copy(subset))
+	@test_throws ErrorException assert_no_diff(subset, a)
+end
+
 @testset "value_dict" begin
 	model = Model(Ipopt.Optimizer)
 	set_silent(model)
@@ -1470,6 +1566,57 @@ end
 	rtolerances = ModelDictionary(model)
 	rtolerances[y[1]] = 0.1
 	@test assert_residuals_small(data; atol=0.01, rtol=0.01, rtolerances)  # y_J[1]: 0.5 <= max(0.01, 0.1*10)=1.0
+end
+
+@testset "Residuals pair with source cells by container key" begin
+	model = Model()
+	stored = [(1, :a), (2, :b), (3, :a)]
+	@variable(model, s[i = 1:3, j = [:a, :b]; (i, j) in stored])
+	z = @variable(model, [i = 1:3, j = [:a, :b]; (i, j) in stored], base_name = "z")
+	model[:z] = SquareModels.SparseZeroArray(z, (Set(1:3), Set([:a, :b])))
+	@variable(model, k[[:a, :b], 2025:2026])
+	SquareModels.copy_variable("s_J", s)
+	SquareModels.copy_variable("z_J", model[:z])
+	SquareModels.copy_variable("k_J", k)
+
+	data = ModelDictionary(model)
+	# Each residual is 1% of its source cell.
+	for (i, j) in stored
+		data[s[i, j]] = 100.0 * i
+		data[model[:s_J][i, j]] = 1.0 * i
+		data[z[i, j]] = 10.0 * i
+		data[model[:z_J][i, j]] = 0.1 * i
+	end
+	data[k] = [1.0 2.0; 3.0 4.0]
+	data[model[:k_J]] = zeros(2, 2)
+	@test assert_residuals_small(data; atol=1e-6, rtol=0.0101)
+	residual_error = try
+		assert_residuals_small(data; atol=1e-6, rtol=0.009)
+	catch error
+		error
+	end
+	@test first.(residual_error.violations) == ["s_J[3,a]", "s_J[2,b]", "s_J[1,a]", "z_J[3,a]", "z_J[2,b]", "z_J[1,a]"]
+	@test last.(residual_error.violations) ≈ [2.7, 1.8, 0.9, 0.27, 0.18, 0.09]
+
+	tolerances = ModelDictionary(model)
+	tolerances[s[2, :b]] = 5.0
+	tolerances[model[:z_J][1, :a]] = 1.0
+	@test_throws ResidualError assert_residuals_small(data; atol=1e-6, tolerances)
+	tolerances[s] = [5.0, 5.0, 5.0]
+	tolerances[z] = [1.0, 1.0, 1.0]
+	@test assert_residuals_small(data; atol=1e-6, tolerances)
+
+	# A residual without a matching source container finds its source by name.
+	@variable(model, q[1:2])
+	@variable(model, q_J[1:3])
+	@variable(model, lone_J)
+	data[q] = [100.0, 100.0]
+	data[q_J] = [0.5, 0.5, nothing]
+	@test assert_residuals_small(data; atol=1e-6, rtol=0.0101)
+	@test_throws ResidualError assert_residuals_small(data; atol=1e-6, rtol=0.001)
+	data[lone_J] = 0.0
+	@test assert_residuals_small(data; atol=10.0)
+	@test_throws KeyError assert_residuals_small(data; atol=1e-6, rtol=0.0101)
 end
 
 end # module

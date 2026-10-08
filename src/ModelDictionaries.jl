@@ -682,9 +682,12 @@ parse_variable_name("σˣ")            # ("σˣ", "")
 ```
 """
 function parse_variable_name(name::String)
-	m = match(r"^(.+?)\[(.+)\]$", name)
-	isnothing(m) && return (name, "")
-	return (m.captures[1], m.captures[2])
+	# The base needs one character, so a leading bracket belongs to it. The index
+	# string needs one character before the final bracket.
+	bracket = endswith(name, ']') ? findnext('[', name, nextind(name, 1)) : nothing
+	close = lastindex(name)
+	(isnothing(bracket) || nextind(name, bracket) == close) && return (SubString(name), SubString(name, 1, 0))
+	return (SubString(name, 1, prevind(name, bracket)), SubString(name, nextind(name, bracket), prevind(name, close)))
 end
 
 """
@@ -719,13 +722,13 @@ See also: [`load`](@ref), [`ModelDictionary`](@ref)
 """
 function unload(path::AbstractString, d::ModelDictionary)
 	_ensure_data_layout!(d)
-	rows = NamedTuple{(:variable, :indices, :value), Tuple{String, String, Float64}}[]
-	for (k, v) in pairs(d.dictionary)
-		isnothing(v) && continue
-		base, indices = parse_variable_name(k)
-		push!(rows, (; variable=base, indices=indices, value=Float64(v)))
-	end
-	Parquet2.writefile(path, DataFrame(rows))
+	assigned = findall(!isnothing, d.dictionary.values)
+	parsed = parse_variable_name.(collect(keys(d.dictionary))[assigned])
+	Parquet2.writefile(path, DataFrame(
+		variable = String.(first.(parsed)),
+		indices = String.(last.(parsed)),
+		value = Float64.(d.dictionary.values[assigned]),
+	))
 end
 
 """
@@ -838,7 +841,7 @@ end
 function _simple_format_df(df::DataFrame)
 	("variable" in names(df) && "indices" in names(df)) ||
 		error("Expected columns: (variable, indices, value)")
-	return df[.!ismissing.(df.value), [:variable, :indices, :value]]
+	return view(df, .!ismissing.(df.value), [:variable, :indices, :value])
 end
 
 function _read_parquet_df(path::AbstractString)
@@ -957,41 +960,51 @@ function read_variable(path::AbstractString, var; default=nothing, variable=base
 end
 
 """Load from a DataFrame in simple (variable, indices, value) format."""
-function _load_simple(df::DataFrame, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
-	data_index = Dict{Tuple{String, String}, Float64}()
-	for row in eachrow(df)
-		key = (_tab_str(row.variable), _tab_str(row.indices))
-		data_index[key] = row.value
-	end
-
+function _load_simple(df::AbstractDataFrame, model::AbstractModel, rename_dict::Dict{String, String}, slice_dict::Dict{String, Tuple{String, Vector{String}, Vector{Int}}})
 	d = ModelDictionary(model)
-	# The model's canonical file keys do not depend on the source or rename
-	# rules. Parse them once per layout revision, shared by every loaded dataset.
-	# The layout clears this cache whenever variables are renamed or changed.
-	model_keys = get!(d._layout.selection_cache, :SquareModels_load_keys) do
-		prepared = Vector{Tuple{String, String}}(undef, length(d._layout.variables))
-		for (slot, variable) in enumerate(d._layout.variables)
-			base, indices = _var_to_key(variable)
-			prepared[slot] = (String(base), String(indices))
-		end
-		prepared
-	end::Vector{Tuple{String, String}}
-	for (slot, (base, indices)) in enumerate(model_keys)
-
-		# Check for slice mapping first
-		if haskey(slice_dict, base)
-			src_symbol, fixed_indices, wildcard_positions = slice_dict[base]
-			lookup_key = _build_slice_key(indices, fixed_indices, wildcard_positions)
-			key = (src_symbol, lookup_key)
-		else
-			# Use renamed base if specified, otherwise use original
-			lookup_base = get(rename_dict, base, base)
-			key = (lookup_base, indices)
-		end
-
-		d.dictionary.values[slot] = get(data_index, key, nothing)
+	variables = _tab_str.(df.variable)
+	indices = _tab_str.(df.indices)
+	values = Float64.(df.value)
+	model_bases = Dict(variable => _model_bases(variable, rename_dict, slice_dict) for variable in unique(variables))
+	_load_rows!(d, model_bases, variables, indices, values)
+	for (base, slice) in slice_dict
+		_load_slice!(d, base, slice, variables, indices, values)
 	end
 	return d
+end
+
+# Later rows overwrite earlier rows with the same key.
+function _load_rows!(d::ModelDictionary, model_bases, variables, indices, values)
+	for (variable, index, value) in zip(variables, indices, values), base in model_bases[variable]
+		_set_loaded!(d, base, index, value)
+	end
+	return d
+end
+
+"""Model base names that read rows of data symbol `variable`. Slices take priority over renames."""
+function _model_bases(variable, rename_dict, slice_dict)
+	bases = [base for (base, source) in rename_dict if source == variable && !haskey(slice_dict, base)]
+	haskey(rename_dict, variable) || haskey(slice_dict, variable) || push!(bases, variable)
+	return bases
+end
+
+# A row matches the model variable whose name parses back to the row's key.
+function _set_loaded!(d::ModelDictionary, base, index, value)
+	name = isempty(index) ? base : string(base, "[", index, "]")
+	found, token = gettoken(keys(d.dictionary), name)
+	found && parse_variable_name(name) == (base, index) && settokenvalue!(d.dictionary, token, value)
+	return nothing
+end
+
+function _load_slice!(d::ModelDictionary, base, (source, fixed_indices, wildcard_positions), variables, indices, values)
+	data = Dict(index => value for (variable, index, value) in zip(variables, indices, values) if variable == source)
+	for (slot, name) in enumerate(keys(d.dictionary))
+		startswith(name, base) || continue
+		name_base, name_indices = parse_variable_name(name)
+		name_base == base || continue
+		d.dictionary.values[slot] = get(data, _build_slice_key(name_indices, fixed_indices, wildcard_positions), nothing)
+	end
+	return nothing
 end
 
 """Load from a Parquet file."""
@@ -1268,11 +1281,31 @@ end
 ```
 """
 function keys_match(a::ModelDictionary, b::ModelDictionary)
-	keys(a) == keys(b) || return false
-	for k in keys(a)
-		xor(isnothing(a[k]), isnothing(b[k])) && return false
-	end
-	return true
+	_ensure_data_layout!(a)
+	_ensure_data_layout!(b)
+	return _same_keys(a, b) && isempty(_nothing_mismatches(a, b))
+end
+
+# Equal indices hold the same names in the same order, so values align by position.
+_same_keys(a::ModelDictionary, b::ModelDictionary) =
+	keys(a.dictionary) === keys(b.dictionary) || keys(a.dictionary) == keys(b.dictionary)
+
+function _nothing_mismatches(a::ModelDictionary, b::ModelDictionary)
+	va, vb = a.dictionary.values, b.dictionary.values
+	return findall(i -> xor(isnothing(va[i]), isnothing(vb[i])), eachindex(va))
+end
+
+_key_names(d::ModelDictionary, positions) = collect(keys(d.dictionary))[positions]
+
+# Pass if |diff| <= atol, or if |ref| > atol and |diff/ref| <= rtol.
+_value_difference(::Nothing, ::Nothing, atol, rtol) = nothing
+function _value_difference(v1, v2, atol, rtol)
+	d = abs(v1 - v2)
+	abs_ref = abs(v2)
+	d <= atol && return nothing
+	abs_ref <= atol && return (d, Inf)
+	rel_d = d / abs_ref
+	return rel_d > rtol ? (d, rel_d) : nothing
 end
 
 """
@@ -1296,59 +1329,74 @@ assert_no_diff(baseline, scenario, atol=1e-6, rtol=0.01, msg="Differences exceed
 """
 function assert_no_diff(a::ModelDictionary, b::ModelDictionary; atol::Real=1e-6, rtol::Real=0.0, msg::String="")
 	error_msg = isempty(msg) ? "" : "$msg\n"
-
-	# Check structural match
-	if keys(a) != keys(b)
-		error("$(error_msg)Cannot compare: dictionaries have different keys")
-	end
-	mismatches = [k for k in keys(a) if xor(isnothing(a[k]), isnothing(b[k]))]
+	_ensure_data_layout!(a)
+	_ensure_data_layout!(b)
+	_same_keys(a, b) || error("$(error_msg)Cannot compare: dictionaries have different keys")
+	mismatches = _nothing_mismatches(a, b)
 	if !isempty(mismatches)
-		error("$(error_msg)Cannot compare: $(length(mismatches)) keys have nothing/value mismatch: $(first(mismatches, 10))$(length(mismatches) > 10 ? "..." : "")")
+		error("$(error_msg)Cannot compare: $(length(mismatches)) keys have nothing/value mismatch: $(_key_names(a, first(mismatches, 10)))$(length(mismatches) > 10 ? "..." : "")")
 	end
 
-	# Check differences using MAKRO-style logic:
-	# Pass if: |diff| <= atol AND (|ref| <= atol OR |diff/ref| <= rtol)
-	violations = Tuple{String, Float64, Float64, Any, Any}[]  # (key, abs_diff, rel_diff, v1, v2)
-	for k in keys(a)
-		v1, v2 = a[k], b[k]
-		isnothing(v1) && continue
-		d = abs(v1 - v2)
-		abs_ref = abs(v2)
-		# Absolute check
-		d <= atol && continue
-		# If reference is small, only absolute matters (already failed above)
-		if abs_ref <= atol
-			push!(violations, (k, d, Inf, v1, v2))
-		else
-			# Check relative tolerance
-			rel_d = d / abs_ref
-			if rel_d > rtol
-				push!(violations, (k, d, rel_d, v1, v2))
-			end
-		end
-	end
-	if !isempty(violations)
-		sort!(violations, by=x -> -x[2])
-		throw(ToleranceError(violations, Float64(atol), Float64(rtol), msg))
-	end
-	return true
+	va, vb = a.dictionary.values, b.dictionary.values
+	positions = findall(i -> !isnothing(_value_difference(va[i], vb[i], atol, rtol)), eachindex(va))
+	isempty(positions) && return true
+	violations = Tuple{String, Float64, Float64, Any, Any}[  # (key, abs_diff, rel_diff, v1, v2)
+		(k, _value_difference(va[i], vb[i], atol, rtol)..., va[i], vb[i])
+		for (k, i) in zip(_key_names(a, positions), positions)
+	]
+	sort!(violations, by=x -> -x[2])
+	throw(ToleranceError(violations, Float64(atol), Float64(rtol), msg))
 end
 
-_residual_tolerance(::Nothing, r::AbstractVariableRef, default::Real) = Float64(default)
 function _source_name(r::AbstractVariableRef)
 	base, indices = split_name(r)
 	source_base = base[1:end - length(RESIDUAL_SUFFIX)]
 	return source_base * indices
 end
 
+# `copy_variable` gives a residual container the keys of its source container.
+# Pair such containers cell by cell. Other residuals find their source by name,
+# so a missing source fails only when a tolerance or `rtol` needs it.
+_residual_source_names(residuals) = [_source_name(r) for r in _variable_refs(residuals)]
+_residual_sources(residuals, _) = _residual_source_names(residuals)
+_residual_sources(::AbstractVariableRef, source::AbstractVariableRef) = (source,)
+_residual_sources(residuals::Union{Array,DenseAxisArray}, source::Union{Array,DenseAxisArray}) =
+	axes(residuals) == axes(source) ? source : _residual_source_names(residuals)
+_residual_sources(residuals::SparseAxisArray, source::SparseAxisArray) =
+	keys(residuals.data) == keys(source.data) ? [source.data[k] for k in keys(residuals.data)] : _residual_source_names(residuals)
+
+_stored_variables(object::SparseZeroArray) = object.data
+_stored_variables(object) = object
+
+# Callers synchronize each dataset once before they scan the residuals.
+_residual_lookup(d::ModelDictionary, variable::AbstractVariableRef) = d.dictionary.values[_variable_position(d, variable)]
+_residual_lookup(d::ModelDictionary, source_name::String) = d[source_name]
+
+_residual_tolerance(::Nothing, r, source, default::Real) = Float64(default)
 """Look up a per-residual override in `tolerances` (exact residual key first, then
 source-variable key), falling back to `default` (used for both `atol` and `rtol`
 overrides via `tolerances`/`rtolerances`)."""
-function _residual_tolerance(tolerances::ModelDictionary, r::AbstractVariableRef, default::Real)
-	tol = tolerances[r]
+function _residual_tolerance(tolerances::ModelDictionary, r, source, default::Real)
+	tol = _residual_lookup(tolerances, r)
 	isnothing(tol) || return Float64(tol)
-	tol = tolerances[_source_name(r)]
+	tol = _residual_lookup(tolerances, source)
 	isnothing(tol) ? Float64(default) : Float64(tol)
+end
+
+function _check_residuals!(violations, data, residuals, sources, atol, rtol, tolerances, rtolerances)
+	for (r, source) in zip(residuals, sources)
+		v = _residual_lookup(data, r)
+		isnothing(v) && continue
+		abs_v = abs(v)
+		tol = _residual_tolerance(tolerances, r, source, atol)
+		rtol_r = _residual_tolerance(rtolerances, r, source, rtol)
+		if rtol_r > 0
+			base = _residual_lookup(data, source)
+			isnothing(base) || (tol = max(tol, rtol_r * abs(base)))
+		end
+		abs_v > tol && push!(violations, (name(r), abs_v, tol))
+	end
+	return violations
 end
 
 """
@@ -1362,8 +1410,9 @@ where `variable` is the endogenous/source variable the residual corresponds to
 blowing up when the reference value is near zero: `atol` alone governs there.
 
 Residual variables are identified by `RESIDUAL_SUFFIX` (see [`residuals`](@ref)).
-After a successful solve they should all be ~0; a large residual indicates an
-equation that is not satisfied by the data/solution.
+The source of a residual is the cell with the same key in the container named
+without the suffix. After a successful solve they should all be ~0; a large
+residual indicates an equation that is not satisfied by the data/solution.
 
 `tolerances`/`rtolerances` may be `ModelDictionary`s with per-residual overrides
 for `atol`/`rtol` respectively. Entries set by exact residual keys override only
@@ -1387,18 +1436,14 @@ assert_residuals_small(baseline; atol=1e-6, rtol=1e-3)
 See also: [`assert_no_diff`](@ref), [`residuals`](@ref)
 """
 function assert_residuals_small(data::ModelDictionary; atol::Real=1e-6, rtol::Real=0.0, msg::String="", tolerances::Union{Nothing, ModelDictionary}=nothing, rtolerances::Union{Nothing, ModelDictionary}=nothing)
+	foreach(d -> isnothing(d) || _ensure_data_layout!(d), (data, tolerances, rtolerances))
 	violations = Tuple{String, Float64, Float64}[]
-	for r in residuals(data.model)
-		v = data[r]
-		isnothing(v) && continue
-		abs_v = abs(v)
-		tol = _residual_tolerance(tolerances, r, atol)
-		rtol_r = _residual_tolerance(rtolerances, r, rtol)
-		if rtol_r > 0
-			base = data[_source_name(r)]
-			isnothing(base) || (tol = max(tol, rtol_r * abs(base)))
-		end
-		abs_v > tol && push!(violations, (name(r), abs_v, tol))
+	objects = object_dictionary(data.model)
+	for (key, object) in objects
+		endswith(string(key), RESIDUAL_SUFFIX) || continue
+		source = get(objects, Symbol(chopsuffix(string(key), RESIDUAL_SUFFIX)), nothing)
+		sources = _residual_sources(_stored_variables(object), _stored_variables(source))
+		_check_residuals!(violations, data, _variable_refs(object), sources, atol, rtol, tolerances, rtolerances)
 	end
 	if !isempty(violations)
 		sort!(violations, by=x -> -x[2])
