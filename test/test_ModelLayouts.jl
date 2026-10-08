@@ -60,11 +60,12 @@ end
     @test layout.revision == revision
     @test length(layout.name_to_slot) == 3
 
+    # Appends keep existing slots, so the revision stays and vectors grow in place.
     JuMP.@variable(model, y)
     @test SquareModels.variable_by_name(model, "y") == y
     @test layout === SquareModels._model_layout(model)
-    @test layout.revision > revision
-    @test length(original_variables) == 3
+    @test layout.revision == revision
+    @test layout.variables === original_variables
     @test length(layout.variables) == 4
     @test layout.name_indices !== original_indices
     @test collect(original_indices) == name.(x)
@@ -73,6 +74,7 @@ end
     # A deletion leaves nonconsecutive MOI indices. Slots remain dense.
     JuMP.delete(model, x[2])
     refresh_model_layout!(model)
+    @test layout.revision > revision
     @test SquareModels.variable_by_name(model, "x[2]") === nothing
     @test SquareModels._layout_slot(layout, x[3]) == 2
     @test SquareModels._layout_slot(layout, y) == 3
@@ -170,9 +172,12 @@ end
     JuMP.@variable(model, added)
     @test JuMP.num_variables(model) == 2
     @test SquareModels._model_growth_stamp(model) == 4
-    # Even a count-neutral delete/add is automatically detected by growth.
+    # Even a count-neutral delete/add is automatically detected by growth. The
+    # new deletion rules out an append, so the layout rebuilds.
+    revision = layout.revision
     @test SquareModels.variable_by_name(model, "added") == added
     @test SquareModels.variable_by_name(model, "x[1]") === nothing
+    @test layout.revision > revision
     @test layout.growth_stamp == 4
     @test SquareModels._layout_slot(layout, x[3]) == 1
     custom = CountingModel(Model(), 0, Dict{Symbol,Any}())

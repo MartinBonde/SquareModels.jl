@@ -186,4 +186,85 @@ end
     @test collect(reordered[prepare_selection(full, x[2:2:4])]) == [22,44]
 end
 
+layout_fields(layout) = (layout.names, layout.variables, layout.name_to_slot, layout.id_to_slot,
+    layout.name_indices === nothing ? nothing : collect(layout.name_indices),
+    layout.n_variables, layout.growth_stamp)
+
+function test_matches_rebuild(model)
+    layout = SquareModels._model_layout(model)
+    @test layout_fields(layout) == layout_fields(SquareModels.ModelLayout(model))
+    layout.name_indices === nothing && return
+    @test all(last(last(gettoken(layout.name_indices, n))) == slot for (slot, n) in enumerate(layout.names))
+end
+
+@testset "Appended variables extend layouts and datasets like a full rebuild" begin
+    m = Model()
+    @variable(m, x[i = [:a, :b], t = 1:2])
+    a = ModelDictionary(m, [1.0, 2.0, 3.0, 4.0])
+    b = ModelDictionary(m)
+    b[x[:b, 2]] = 40.0
+    subset = a[a .> 2]
+    layout = a._layout
+    revision, variables = layout.revision, layout.variables
+    old_keys, old_names = keys(a.dictionary), copy(layout.names)
+    selection, window = prepare_selection(a, x[:a, :]), a[x]
+
+    @variable(m, y[1:3])
+    @test all(isnothing, collect(a[y]))
+    test_matches_rebuild(m)
+    @test layout.revision == revision
+    @test layout.variables === variables
+    @test collect(old_keys) == old_names
+    @test keys(b.dictionary) === old_keys
+    b[y] = [5.0, 6.0, 7.0]
+    @test b[x[:b, 2]] == 40.0
+
+    # Residual containers from add_equation! are appended in turn. Dataset `b`
+    # skips this step and must extend across both appends at once.
+    block = Block(m)
+    add_equation!(block, y[1], y[1], 0)
+    a[y[1]] = 8.0
+    add_equation!(block, x[:a, 1], x[:a, 1], 0)
+    @test all(isnothing, collect(a[m[:x_J]]))
+    test_matches_rebuild(m)
+    @test layout.revision == revision
+    @test collect(window) == [1.0 3.0; 2.0 4.0]
+    @test collect(a[selection]) == [1.0, 3.0]
+    window[:b, 1] = 20.0
+    @test a[x[:b, 1]] == 20.0
+    @test length(subset) == 2
+    @test_throws KeyError subset[y[1]]
+    @test collect(b[y]) == [5.0, 6.0, 7.0]
+    @test all(isnothing, collect(b[m[:y_J]]))
+    @test b[x[:b, 2]] == 40.0
+    @test length(a) == length(b) == JuMP.num_variables(m) == 4 + 3 + 3 + 4
+    @test keys(a) === keys(b)
+    @test collect(keys(a)) == layout.names
+
+    # A deletion rules out an append. The rebuild retains values by identity.
+    delete(m, y[3])
+    @variable(m, z)
+    @test isnothing(a[z])
+    test_matches_rebuild(m)
+    @test layout.revision > revision
+    @test collect(a[x]) == [1.0 3.0; 20.0 4.0]
+    @test a[y[1]] == 8.0
+    @test b[y[2]] == 6.0
+    @test_throws ArgumentError a[selection]
+    @test_throws ArgumentError window[:a, 1]
+end
+
+@testset "Appended duplicate names disable datasets like a full rebuild" begin
+    m = Model()
+    @variable(m, x)
+    d = ModelDictionary(m, [1.0])
+    anonymous = @variable(m)
+    @test isnothing(d[anonymous])
+    test_matches_rebuild(m)
+    @variable(m, base_name = "x")
+    test_matches_rebuild(m)
+    @test SquareModels._model_layout(m).name_indices === nothing
+    @test_throws ArgumentError d[x]
+end
+
 end

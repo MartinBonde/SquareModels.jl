@@ -68,9 +68,10 @@ Variable additions are detected on dataset and name lookup. For standard cached
 JuMP models, an isolated adapter checks the allocated variable-slot count in
 constant time. Calling `num_variables` on these backends would itself scan every
 variable. Other backends use their variable-count query, whose cost depends on
-the backend. The shared layout is rebuilt once for a changed model, then each
-accessed dataset moves its values by variable identity. Batch model construction
-before creating data or repeatedly accessing it.
+the backend. When variables were only added, the shared layout and each accessed
+dataset are extended with the new slots; existing slots, selections, and windows
+stay valid. Any deletion rebuilds the layout, and each accessed dataset then moves
+its values by variable identity.
 
 Membership and metadata inspection describe the dataset's current snapshot.
 Indexing or `add_missing_model_variables!` discovers additions; inspecting keys
