@@ -5,7 +5,7 @@ using JuMP: @variable, @constraint, name
 using JuMP: set_start_value, fix, has_lower_bound, has_upper_bound
 using JuMP: lower_bound, upper_bound, set_lower_bound, set_upper_bound
 using JuMP: all_variables, is_fixed, value, add_to_expression!
-using JuMP: optimize!, assert_is_solved_and_feasible
+using JuMP: optimize!, is_solved_and_feasible, assert_is_solved_and_feasible
 using JuMP: set_silent, unsafe_backend, backend, set_time_limit_sec
 using JuMP: FEASIBILITY_SENSE, set_objective_sense, set_optimizer_attribute
 import MathOptInterface as MOI
@@ -498,8 +498,8 @@ constructor (e.g. `Ipopt.Optimizer`, `CONOPT.Optimizer`), a factory closure, or 
 Alternatively, pass the `gamsdir` keyword to solve the system as a GAMS constrained
 nonlinear system (CNS), e.g. `square_model(; gamsdir = "C:/GAMS/53")`. This requires the
 optional `GAMS` package — run `using GAMS` first. The GAMS workspace is built so its
-GAMS outputs land in `working_dir`, which lets `solve!`/`annotate_lst!` locate and annotate
-them afterwards.
+GAMS outputs land in `working_dir`, which lets `solve!` locate and annotate them after a
+failed solve.
 
 Extra keyword arguments are applied as optimizer attributes, e.g.
 `square_model(Ipopt.Optimizer; tol = 1e-10)` or `square_model(; gamsdir = "C:/GAMS/53", lmmxsf = 1)`.
@@ -530,7 +530,7 @@ end
 # GAMS listing annotation
 # ============================================================================
 
-"""Return GAMS files written by `model` that should be annotated after solving."""
+"""Return GAMS files written by `model` that should be annotated after a failed solve."""
 function _gams_annotation_paths(model)
     ext = Base.get_extension(@__MODULE__, :SquareModelsGAMSExt)
     ext === nothing ? String[] : ext._gams_annotation_paths(model)
@@ -551,6 +551,7 @@ function _solve_equation_names(model)
 end
 
 function _annotate_gams_files!(block, model)
+    _is_gams_model(model) || return
     paths = _gams_annotation_paths(model)
     if !isempty(paths)
         equation_names = _solve_equation_names(model)
@@ -707,6 +708,9 @@ Optimizer attributes (silent mode, time limit) are copied from the block's model
 intermediate solve model. Use `set_silent(model)` or `set_time_limit_sec(model, seconds)`
 on the original model to configure solver behavior.
 
+With a GAMS optimizer, a failed solve rewrites `moi.lst` and `moi.gms` with model names
+(see [`annotate_lst!`](@ref)) before the error is raised. A successful solve leaves them as is.
+
 # Arguments
 - `block::Block`: Block defined on a model with an optimizer set
 - `data::ModelDictionary`: Data dictionary to update with solution values
@@ -739,13 +743,14 @@ function solve!(
     model, var_map = _build_model(block, data; start_values, replace_nothing, presolve_diagnostics)
     try
         optimize!(model)
-    finally
-        if _is_gams_model(model)
-            _annotate_gams_files!(block, model)
-        end
+    catch
+        _annotate_gams_files!(block, model)
+        rethrow()
     end
-
-    assert_is_solved_and_feasible(model)
+    if !is_solved_and_feasible(model)
+        _annotate_gams_files!(block, model)
+        assert_is_solved_and_feasible(model)
+    end
 
     for (original_var, solve_var) in var_map
         data[original_var] = value(solve_var)
