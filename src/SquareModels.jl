@@ -193,6 +193,21 @@ struct Block
 
 		new(model, endogenous, residuals, variables, endogenous_set, equations, test_constraints)
 	end
+
+	function Block(
+		model::AbstractModel,
+		endogenous::Vector{VariableRef},
+		residuals::Vector{VariableRef},
+		variables::Set{VariableRef},
+		endogenous_set::Set{VariableRef},
+		equations::Vector{Equation},
+		test_constraints::Vector{TestConstraint}
+	)
+		length(equations) == length(endogenous) ||
+			error("Block must be square: got $(length(equations)) equations and $(length(endogenous)) endogenous variables")
+		@assert length(endogenous_set) == length(endogenous)
+		new(model, endogenous, residuals, variables, endogenous_set, equations, test_constraints)
+	end
 end
 
 Block(model) = Block(model, VariableRef[], VariableRef[], Set{VariableRef}(), Equation[], TestConstraint[])
@@ -566,22 +581,42 @@ function Block(
 	Block(model, VariableRef[endogenous...], VariableRef[residuals...], variables, equations, test_constraints)
 end
 
-function Base.:+(a::Block, b::Block)
-	a.model == b.model || error("Cannot add $a and $b. Blocks must belong to the same model.")
+"""
+    sum(blocks::AbstractVector{Block}) → Block
 
-	if overlaps(a, b)
-		shared = shared_endogenous(a, b)
-		formatted = format_variables(shared)
+Merge `blocks` in one pass. The result equals `reduce(+, blocks)`, but each field is built once
+instead of once per pair. Generators fall back to pairwise `+`; collect them into a vector first.
+An empty vector throws an `ArgumentError`, since a `Block` needs a model.
+"""
+function Base.sum(blocks::AbstractVector{Block})
+	isempty(blocks) && throw(ArgumentError("Cannot sum an empty vector of blocks: a Block needs a model."))
+	a = first(blocks)
+	i = findfirst(b -> b.model != a.model, blocks)
+	isnothing(i) || error("Cannot add $a and $(blocks[i]). Blocks must belong to the same model.")
+
+	endogenous = reduce(vcat, [b.endogenous for b in blocks])
+	endogenous_set = Set{VariableRef}(endogenous)
+	if length(endogenous_set) != length(endogenous)
+		counts = Dict{VariableRef,Int}()
+		foreach(v -> counts[v] = get(counts, v, 0) + 1, endogenous)
+		shared = unique(v for v in endogenous if counts[v] > 1)
 		error("Cannot combine blocks: $(length(shared)) endogenous variable(s) appear in both blocks.\n" *
-		      "Overlapping endogenous variables:\n$formatted\n" *
+		      "Overlapping endogenous variables:\n$(format_variables(shared))\n" *
 		      "This would create a non-square system with more constraints than unique endogenous variables.")
 	end
 
-	combined_vars = union(a.variables, b.variables)
-	combined_eqs = vcat(a.equations, b.equations)
-	combined_test_constraints = vcat(a.test_constraints, b.test_constraints)
-	Block(a.model, vcat(a.endogenous, b.endogenous), vcat(a.residuals, b.residuals), combined_vars, combined_eqs, combined_test_constraints)
+	Block(
+		a.model,
+		endogenous,
+		reduce(vcat, [b.residuals for b in blocks]),
+		foldl(union!, (b.variables for b in blocks); init=Set{VariableRef}()),
+		endogenous_set,
+		reduce(vcat, [b.equations for b in blocks]),
+		reduce(vcat, [b.test_constraints for b in blocks]),
+	)
 end
+
+Base.:+(a::Block, b::Block) = sum([a, b])
 
 function Base.:-(a::Block, b::Block)
 	a.model == b.model || error("Cannot subtract $b from $a. Blocks must belong to the same model.")
