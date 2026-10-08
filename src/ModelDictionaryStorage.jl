@@ -1,5 +1,6 @@
-# Model layouts own immutable snapshots of names and variable identities. Every
-# dataset owns its value vector; no dataset inserts into shared dictionary keys.
+# Model layouts own names and variable identities, which only appends extend in
+# place. Every dataset owns its value vector; no dataset inserts into shared
+# dictionary keys.
 
 function _layout_indices(layout)
     layout.name_indices === nothing && throw(ArgumentError(
@@ -100,13 +101,15 @@ end
 function _ensure_data_layout!(d::ModelDictionary{T}; expand::Bool=false) where {T}
     layout = _ensure_model_layout!(d._layout)
     full = d._full || expand
-    d._revision == layout.revision && full == d._full && return d
+    d._revision == layout.revision && full == d._full && return _append_data_slots!(d, layout)
     _layout_indices(layout)
     if full
         values = Vector{Union{Nothing,T}}(nothing, length(layout.variables))
-        for (i, variable) in enumerate(d._variables)
+        # A full dataset shares the layout's variable vector, which appends
+        # extend in place. Its values cover a prefix of those variables.
+        for (variable, value) in zip(d._variables, d.dictionary.values)
             slot = get(layout.id_to_slot, JuMP.index(variable), 0)
-            slot == 0 || (values[slot] = d.dictionary.values[i])
+            slot == 0 || (values[slot] = value)
         end
         dictionary = Dictionary(_layout_indices(layout), values)
         variables = layout.variables
@@ -126,13 +129,26 @@ function _ensure_data_layout!(d::ModelDictionary{T}; expand::Bool=false) where {
     return d
 end
 
+# Within one revision, the layout only appends slots. Subsets need no change.
+# Full datasets grow in place, so their windows remain valid.
+_append_data_slots!(d::ModelDictionary, layout) = d._full ? _append_full_slots!(d, layout) : d
+function _append_full_slots!(d::ModelDictionary, layout)
+    values = d.dictionary.values
+    length(values) == layout.n_variables && return d
+    indices = _layout_indices(layout)
+    append!(values, Iterators.repeated(nothing, layout.n_variables - length(values)))
+    setfield!(d, :dictionary, Dictionary(indices, values))
+    setfield!(d, :_variables, layout.variables)
+    return d
+end
+
 # Membership and metadata inspection describe the dataset's current contents;
 # indexing or explicit synchronization discovers additions. Adopt shared layout
 # updates made by other operations.
 function _ensure_data_snapshot!(d::ModelDictionary)
     _check_model_layout(d._layout)
-    d._revision == d._layout.revision || _ensure_data_layout!(d)
-    return d
+    d._revision == d._layout.revision || return _ensure_data_layout!(d)
+    return _append_data_slots!(d, d._layout)
 end
 
 function _variable_position(d::ModelDictionary, variable::AbstractVariableRef)

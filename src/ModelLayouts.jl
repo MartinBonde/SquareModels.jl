@@ -1,6 +1,8 @@
 # Shared variable metadata. A layout belongs to the model, while datasets own
-# their values. Dictionaries are replaced on refresh so datasets can retain an
+# their values. A full refresh replaces every field so datasets can retain an
 # old variable-to-slot snapshot while moving values into the refreshed layout.
+# Appended variables extend the fields in place and keep the revision, because
+# existing slots do not change. Name indices are copied, as datasets share them.
 using Dictionaries: Indices
 
 mutable struct ModelLayout{M<:AbstractModel,V<:AbstractVariableRef}
@@ -38,32 +40,65 @@ function _refresh_model_layout!(layout::ModelLayout, variables=all_variables(lay
     id_to_slot = Dict{MOI.VariableIndex,Int}()
     sizehint!(name_to_slot, length(variables))
     sizehint!(id_to_slot, length(variables))
-    n_unnamed = 0
     for (slot, variable) in enumerate(variables)
         var_name = name(variable)
         names[slot] = var_name
         id_to_slot[JuMP.index(variable)] = slot
-        # JuMP excludes unnamed variables from name lookup. Zero marks an
-        # ambiguous name, preserving JuMP's duplicate-name error on lookup.
-        if !isempty(var_name)
-            name_to_slot[var_name] = haskey(name_to_slot, var_name) ? 0 : slot
-        else
-            n_unnamed += 1
-        end
+        _register_name!(name_to_slot, var_name, slot)
     end
+    n_unnamed = count(isempty, names)
     layout.names = names
     layout.variables = variables
     layout.name_to_slot = name_to_slot
     layout.id_to_slot = id_to_slot
     # A ModelDictionary requires every name (including anonymous names) to be
     # unique. The registry itself still supports ambiguous and unnamed models.
+    # Indices adopts its input vector, which appends would then corrupt.
     unique_names = length(name_to_slot) + n_unnamed == length(names) && n_unnamed <= 1
-    layout.name_indices = unique_names ? Indices(names) : nothing
+    layout.name_indices = unique_names ? Indices(copy(names)) : nothing
     empty!(layout.selection_cache)
     layout.n_variables = length(variables)
     layout.growth_stamp = _model_growth_stamp(layout.model)
     layout.revision += UInt(1)
     return layout
+end
+
+# JuMP excludes unnamed variables from name lookup. Zero marks an ambiguous
+# name, preserving JuMP's duplicate-name error on lookup.
+function _register_name!(name_to_slot, var_name, slot)
+    isempty(var_name) && return
+    name_to_slot[var_name] = haskey(name_to_slot, var_name) ? 0 : slot
+    return
+end
+
+function _append_model_layout!(layout::ModelLayout{M,V}, growth_stamp::Int) where {M,V}
+    n_deleted = layout.growth_stamp - layout.n_variables
+    variables = [V(layout.model, MOI.VariableIndex(i)) for i in layout.growth_stamp+1:growth_stamp]
+    names = name.(variables)
+    for (slot, variable, var_name) in zip(layout.n_variables .+ eachindex(variables), variables, names)
+        layout.id_to_slot[JuMP.index(variable)] = slot
+        _register_name!(layout.name_to_slot, var_name, slot)
+    end
+    append!(layout.variables, variables)
+    append!(layout.names, names)
+    layout.name_indices = _extend_name_indices(layout.name_indices, names)
+    # Cached entries may cover only the old slots. Prepared selections stay valid.
+    empty!(layout.selection_cache)
+    layout.n_variables = length(layout.variables)
+    layout.growth_stamp = growth_stamp
+    @assert layout.n_variables == growth_stamp - n_deleted == length(layout.names) == length(layout.id_to_slot)
+    @assert layout.name_indices === nothing || length(layout.name_indices) == layout.n_variables
+    return layout
+end
+
+_extend_name_indices(::Nothing, names) = nothing
+function _extend_name_indices(indices::Indices{String}, names)
+    extended = copy(indices)
+    for var_name in names
+        var_name in extended && return nothing
+        insert!(extended, var_name)
+    end
+    return extended
 end
 
 function _check_model_layout(layout::ModelLayout)
@@ -82,8 +117,8 @@ end
 # including a deletion followed by an addition. This relies only on the known
 # cache/container implementations below; other backends use the public count.
 # Deletion alone and renaming require refresh_model_layout! explicitly.
-_model_growth_stamp(::AbstractModel) = nothing
-function _model_growth_stamp(model::JuMP.GenericModel)
+_variables_container(::AbstractModel) = nothing
+function _variables_container(model::JuMP.GenericModel)
     backend = JuMP.backend(model)
     backend isa MOI.Utilities.CachingOptimizer || return nothing
     cache = backend.model_cache
@@ -93,20 +128,34 @@ function _model_growth_stamp(model::JuMP.GenericModel)
     variables = cache.variables
     variables isa MOI.Utilities.VariablesContainer || return nothing
     hasproperty(variables, :set_mask) || return nothing
-    mask = variables.set_mask
-    mask isa Vector{UInt16} || return nothing
-    return length(mask)
+    variables.set_mask isa Vector{UInt16} || return nothing
+    return variables
+end
+
+_model_growth_stamp(model::AbstractModel) = _growth_stamp(_variables_container(model))
+_growth_stamp(::Nothing) = nothing
+_growth_stamp(variables) = length(variables.set_mask)
+
+# The container gives a new variable the index of its new storage length and
+# never reuses a deleted index. If growth leaves the deleted-slot count
+# unchanged, the new variables are exactly the indices after the old stamp.
+function _appended_only(layout::ModelLayout, growth_stamp::Int)
+    layout.growth_stamp isa Int && growth_stamp > layout.growth_stamp || return false
+    n_live = MOI.get(_variables_container(layout.model), MOI.NumberOfVariables())
+    return growth_stamp - n_live == layout.growth_stamp - layout.n_variables
 end
 
 function _ensure_model_layout!(layout::ModelLayout)
     _check_model_layout(layout)
     growth_stamp = _model_growth_stamp(layout.model)
-    changed = growth_stamp === nothing ?
-        JuMP.num_variables(layout.model) != layout.n_variables :
-        growth_stamp != layout.growth_stamp
-    changed && _refresh_model_layout!(layout)
-    return layout
+    growth_stamp === nothing && return _ensure_counted_layout!(layout)
+    growth_stamp == layout.growth_stamp && return layout
+    _appended_only(layout, growth_stamp) || return _refresh_model_layout!(layout)
+    return _append_model_layout!(layout, growth_stamp)
 end
+
+_ensure_counted_layout!(layout::ModelLayout) =
+    JuMP.num_variables(layout.model) == layout.n_variables ? layout : _refresh_model_layout!(layout)
 
 function _model_layout(model::AbstractModel; refresh::Bool=false)
     if hasproperty(model, :ext)
@@ -139,9 +188,11 @@ end
 Rebuild SquareModels' shared variable names and storage-slot index for `model`.
 Call this after deleting or renaming variables, or changing registered variable
 containers. Standard cached JuMP models detect additions automatically using an
-O(1) growth stamp; querying the number of live variables would scan the model.
-Other backends fall back to checking the live variable count. Missing-name
-lookups in a synchronized standard model do not scan its variables.
+O(1) growth stamp. When no variable was deleted, the layout appends only the new
+variables and keeps existing slots, selections, and windows valid; otherwise it
+rebuilds. Other backends fall back to a full rebuild when the live variable count
+changes. Missing-name lookups in a synchronized standard model do not scan its
+variables.
 
 Refreshing invalidates prepared selections and lets datasets synchronize their
 values by variable identity when next accessed. It also drops the cached map

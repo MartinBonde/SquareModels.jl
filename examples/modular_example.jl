@@ -144,8 +144,8 @@ for m in submodels
 	m.set_data!(db)
 end
 
-base_model() = sum(m.define_equations() for m in submodels)
-calibration_model() = sum(m.define_calibration() for m in submodels)
+base_model() = sum([m.define_equations() for m in submodels])
+calibration_model() = sum([m.define_calibration() for m in submodels])
 
 # ==============================================================================
 # Solve calibration

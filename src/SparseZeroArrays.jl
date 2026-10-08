@@ -366,13 +366,32 @@ function Base.show(io::IOContext, s::SparseZeroArray)
     show(io, s.data)
 end
 
+const MA = JuMP._MA
+
 """
-    ∑(args...; kwargs...)
+    ∑(itr)
 
 Sum with `Zero()` as the initial value, so summing over empty or all-missing
-sparse dimensions yields `Zero()` instead of erroring.
+sparse dimensions yields `Zero()` instead of erroring. JuMP expressions are
+accumulated in place, so large sums take linear time.
 """
-∑(args...; kwargs...) = sum(args...; init=Zero(), kwargs...)
+function ∑(itr)
+    acc, owned = Zero(), false
+    for x in itr
+        x isa Zero && continue
+        acc, owned = _sum_add!!(acc, owned, x)
+    end
+    return acc
+end
+
+# `owned` is false while `acc` is still the caller's first term, which must not be mutated.
+_sum_add!!(::Zero, owned, x) = (x, false)
+_sum_add!!(acc::Union{AffExpr,QuadExpr}, owned, x) = (MA.operate!!(+, owned ? acc : copy(acc), x), true)
+function _sum_add!!(acc::NonlinearExpr, owned, x)
+    owned && acc.head === :+ && return (push!(acc.args, x); (acc, true))
+    return (NonlinearExpr(:+, Any[acc, x]), true)
+end
+_sum_add!!(acc, owned, x) = (acc + x, true)
 
 # ==============================================================================
 # Configuration — toggle SparseZeroArray wrapping on/off

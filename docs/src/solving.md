@@ -116,9 +116,10 @@ using GAMS  # loads the optional GAMS extension
 model = square_model(; gamsdir="C:/GAMS/53", solver="CONOPT4")
 ```
 
-With the GAMS backend, `solve!` annotates the generated `moi.lst` listing with
-the model's variable and equation names (see [`annotate_lst!`](@ref)), which
-makes GAMS solver output readable for debugging.
+With the GAMS backend, a failed `solve!` annotates the generated `moi.lst` and
+`moi.gms` files with the model's variable and equation names (see
+[`annotate_lst!`](@ref)) before it raises the error, which makes GAMS solver
+output readable for debugging. A successful solve leaves the files as GAMS wrote them.
 
 ## Diagnostics
 

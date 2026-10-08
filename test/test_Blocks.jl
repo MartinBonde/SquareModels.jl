@@ -689,6 +689,66 @@ end
 	@test count('\n', err4.msg) < 20
 end
 
+@testset "sum of blocks" begin
+	m = Model()
+	JuMP.@variables m begin
+		x
+		y[1:3]
+		z[1:2, 1:2]
+	end
+
+	b1 = @block m begin
+		@test_constraint("x check")
+		x, x == y[1]
+	end
+	b2 = @block m begin
+		y[i ∈ 1:3], y[i] == i * x
+	end
+	b3 = @block m begin
+		@test_constraint("z check")
+		z[i ∈ 1:2, j ∈ 1:2], z[i,j] == y[i] + j
+	end
+	blocks = [b1, b2, b3]
+
+	summed = sum(blocks)
+	folded = b1 + b2 + b3
+	@test endogenous(summed) == endogenous(folded)
+	@test residuals(summed) == residuals(folded)
+	@test summed.equations == folded.equations
+	@test summed.variables == folded.variables
+	@test summed._endogenous_set == folded._endogenous_set
+	@test test_constraints(summed) == test_constraints(folded)
+	@test summed.model === m
+	@test endogenous(sum([b1])) == endogenous(b1)
+	@test endogenous(sum([b1])) !== endogenous(b1)
+	@test_throws ArgumentError sum(Block[])
+
+	b4 = @block m begin
+		y[i ∈ 2:3], y[i] == 0
+	end
+	pairwise_error = try
+		b2 + b4
+		nothing
+	catch e
+		e
+	end
+	sum_error = try
+		sum([b1, b2, b4])
+		nothing
+	catch e
+		e
+	end
+	@test sum_error isa ErrorException
+	@test sum_error.msg == pairwise_error.msg
+
+	other = Model()
+	@variable(other, w)
+	b5 = @block other begin
+		w, w == 1
+	end
+	@test_throws "Blocks must belong to the same model" sum([b1, b5])
+end
+
 @testset "Block diagnostics" begin
 	m = Model()
 	JuMP.@variables m begin

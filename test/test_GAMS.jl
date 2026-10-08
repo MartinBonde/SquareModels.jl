@@ -53,7 +53,8 @@ if GAMS_AVAILABLE
 end
 
 @testset "square_model with gamsdir" begin
-    m = square_model(; gamsdir = GAMS_SYSDIR)
+    dir = mktempdir()
+    m = square_model(; gamsdir = GAMS_SYSDIR, working_dir=dir)
     @test m isa Model
 
     JuMP.@variables m begin
@@ -77,6 +78,11 @@ end
 
     @test solution[x] ≈ 10.0 atol=1e-6
     @test solution[y] ≈ 25.0 atol=1e-6
+
+    # A successful solve skips annotation.
+    content = read(joinpath(dir, "moi.gms"), String)
+    @test occursin(r"\bx1\b", content)
+    @test occursin(r"\beq1\b", content)
 end
 
 @testset "GAMS failed solve annotates generated files" begin
@@ -104,7 +110,8 @@ end
     # GAMS.jl suppresses the symbol listing ($offlisting, limrow/limcol/solprint=0), so a
     # clean solve never names x<i>/eq<i> in the .lst. CONOPT *does* name them when the square
     # system is singular ("ERRORS/WARNINGS IN EQUATION/VARIABLE"), which is exactly the case
-    # annotate_lst! exists to make readable. Two linearly dependent equations force that.
+    # annotate_lst! exists to make readable. Two linearly dependent equations force that, and
+    # inconsistent right-hand sides make the solve fail, since solve! annotates only on failure.
     #
     # The working dir is pinned via an explicit workspace so we can read the .lst after the
     # solve (GAMS.jl swaps the args when both "sysdir" and "workdir" attributes are set).
@@ -125,16 +132,11 @@ end
 
     block = @block m begin
         foo, foo + bar == 2
-        bar, 2foo + 2bar == 4
+        bar, 2foo + 2bar == 5
     end
     data[residuals(block)] .= 0.0
 
-    # A singular system may or may not be reported as a solver failure; either way solve!
-    # annotates the .lst before that decision, which is what we are checking here.
-    try
-        solve(block, data)
-    catch
-    end
+    @test_throws ErrorException solve(block, data)
 
     lst = joinpath(dir, "moi.lst")
     @test isfile(lst)
