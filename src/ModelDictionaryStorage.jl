@@ -30,8 +30,9 @@ function _numeric_storage_type(::Type{V}) where {V}
     return T
 end
 
-function _new_model_dictionary(model, dictionary::Dictionary{String,Union{Nothing,T}},
-        layout, full, variables::Vector{V}, positions=nothing) where {T,V<:AbstractVariableRef}
+function _new_model_dictionary(model, dictionary::Dictionary{String}, layout, full,
+        variables::Vector{V}, positions=nothing) where {V<:AbstractVariableRef}
+    T = _numeric_storage_type(eltype(dictionary))
     return ModelDictionary{T,typeof(model),typeof(layout),V}(
         model, dictionary, layout, layout.revision,
         full, variables, positions,
