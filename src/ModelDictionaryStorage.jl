@@ -30,8 +30,13 @@ function _numeric_storage_type(::Type{V}) where {V}
     return T
 end
 
-function _new_model_dictionary(model, dictionary::Dictionary{String,Union{Nothing,T}},
-        layout, full, variables::Vector{V}, positions=nothing) where {T,V<:AbstractVariableRef}
+# Derive the type parameters from the arguments instead of matching static
+# parameters against `Union{Nothing,T}`. The body then runs as written in a
+# debugger or line by line in the REPL, and the types still constant-fold.
+function _new_model_dictionary(model, dictionary::Dictionary{String,>:Nothing}, layout, full,
+        variables::Vector{<:AbstractVariableRef}, positions=nothing)
+    T = Base.nonnothingtype(eltype(dictionary))
+    V = eltype(variables)
     return ModelDictionary{T,typeof(model),typeof(layout),V}(
         model, dictionary, layout, layout.revision,
         full, variables, positions,
