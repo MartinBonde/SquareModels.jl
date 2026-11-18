@@ -42,6 +42,23 @@ using DataFrames, Parquet2
     @test collect(anonymous_data[[""]]) == [5]
 end
 
+@testset "Dataset construction infers the value type" begin
+    m = Model()
+    @variable(m, x[1:3])
+    layout = SquareModels._model_layout(m)
+    for T in (Float64, Bool, Number, Union{Int,Float64})
+        values = Vector{Union{Nothing,T}}(nothing, 3)
+        dictionary = Dictionary(SquareModels._layout_indices(layout), values)
+        d = @inferred SquareModels._new_model_dictionary(m, dictionary, layout, true, layout.variables)
+        @test d isa ModelDictionary{T}
+        @test d.dictionary.values === values
+        @test @inferred(SquareModels._subset_dictionary(d, [1, 3])) isa ModelDictionary{T}
+    end
+    # A dictionary that cannot hold `nothing` is not silently copied.
+    narrow = Dictionary(SquareModels._layout_indices(layout), zeros(3))
+    @test_throws MethodError SquareModels._new_model_dictionary(m, narrow, layout, true, layout.variables)
+end
+
 @testset "Selections preserve coordinates, order, duplicates and ownership" begin
     m = Model()
     @variable(m, x[[:a,:b], 2020:2022])
